@@ -1,7 +1,23 @@
 [project]
 name = "mcp-launchpad"
 version = "0.1.0"
-description = "Add your description here"
+description = "A lightweight CLI for efficiently discovering and executing MCP server tools"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "mcp>=1.0.0",
+    "click>=8.1.0",
+    "rank-bm25>=0.2.2",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+mcp-launchpad = "mcp_launchpad.cli:main"
+mcpl = "mcp_launchpad.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_launchpad"]
