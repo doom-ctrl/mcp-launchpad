@@ -55,8 +55,10 @@ def get_config(ctx: click.Context):
 @click.option("--method", "-m", type=click.Choice(["bm25", "regex", "exact"]), default="bm25", help="Search method")
 @click.option("--limit", "-l", default=10, help="Maximum results to return")
 @click.option("--refresh", is_flag=True, help="Refresh the tool cache before searching")
+@click.option("--schema", "-s", is_flag=True, help="Include full input schema in results")
+@click.option("--first", "-1", is_flag=True, help="Return only the top result with full details")
 @click.pass_context
-def search(ctx: click.Context, query: str, method: str, limit: int, refresh: bool):
+def search(ctx: click.Context, query: str, method: str, limit: int, refresh: bool, schema: bool, first: bool):
     """Search for tools matching a query."""
     output: OutputHandler = ctx.obj["output"]
     config = get_config(ctx)
@@ -76,43 +78,92 @@ def search(ctx: click.Context, query: str, method: str, limit: int, refresh: boo
     if not tools:
         output.error(
             ValueError("No tools found"),
-            help_text="Run 'mcp list --refresh' to populate the tool cache.",
+            help_text="Run 'mcpl list --refresh' to populate the tool cache.",
         )
         return
+
+    # If --first flag is set, only return 1 result
+    effective_limit = 1 if first else limit
 
     # Search
     searcher = ToolSearcher(tools)
     try:
-        results = searcher.search(query, SearchMethod(method), limit)
+        results = searcher.search(query, SearchMethod(method), effective_limit)
     except ValueError as e:
         output.error(e, help_text="Check your search query syntax.")
         return
 
     # Output
     if ctx.obj["json_mode"]:
+        result_data = []
+        for r in results:
+            item = r.to_dict()
+            item["requiredParams"] = r.tool.get_required_params()
+            if schema or first:
+                item["inputSchema"] = r.tool.input_schema
+            if first:
+                item["exampleCall"] = r.tool.get_example_call()
+            result_data.append(item)
+
         output.success({
             "query": query,
             "method": method,
-            "results": [r.to_dict() for r in results],
+            "results": result_data,
         })
     else:
         if not results:
             click.echo(f"No tools found matching '{query}'")
         else:
-            click.echo(f"Found {len(results)} tools matching '{query}':\n")
-            for r in results:
+            # For --first flag, show full details like inspect
+            if first and results:
+                r = results[0]
                 click.secho(f"[{r.tool.server}] ", fg="cyan", nl=False)
                 click.secho(r.tool.name, fg="green", bold=True)
-                if r.tool.description:
-                    click.echo(f"  {r.tool.description[:80]}{'...' if len(r.tool.description) > 80 else ''}")
                 click.echo()
+                if r.tool.description:
+                    click.echo(f"{r.tool.description}")
+                    click.echo()
+                click.secho("Parameters:", bold=True)
+                params_summary = r.tool.get_params_summary()
+                click.echo(f"  {params_summary}")
+                click.echo()
+                if schema:
+                    click.secho("Input Schema:", bold=True)
+                    click.echo(json.dumps(r.tool.input_schema, indent=2))
+                    click.echo()
+                click.secho("Example:", bold=True)
+                click.echo(f"  {r.tool.get_example_call()}")
+            else:
+                click.echo(f"Found {len(results)} tools matching '{query}':\n")
+                for r in results:
+                    click.secho(f"[{r.tool.server}] ", fg="cyan", nl=False)
+                    click.secho(r.tool.name, fg="green", bold=True)
+                    if r.tool.description:
+                        click.echo(f"  {r.tool.description[:80]}{'...' if len(r.tool.description) > 80 else ''}")
+                    # Show required params
+                    required = r.tool.get_required_params()
+                    if required:
+                        click.secho(f"  ⚡ Requires: ", fg="yellow", nl=False)
+                        click.echo(", ".join(required))
+                    if schema:
+                        click.secho("  Schema: ", fg="blue", nl=False)
+                        click.echo(json.dumps(r.tool.input_schema, indent=4).replace("\n", "\n    "))
+                    click.echo()
+
+                # Usage hint footer
+                click.secho("─" * 50, dim=True)
+                click.echo("To execute: ", nl=False)
+                click.secho("mcpl call <server> <tool> '{\"param\": \"value\"}'", fg="cyan")
+                click.echo("Full schema: ", nl=False)
+                click.secho("mcpl inspect <server> <tool>", fg="cyan")
 
 
 @main.command()
 @click.argument("server")
 @click.argument("tool")
+@click.option("--example", "-e", is_flag=True, help="Include an example call command")
 @click.pass_context
-def inspect(ctx: click.Context, server: str, tool: str):
+def inspect(ctx: click.Context, server: str, tool: str, example: bool):
     """Get the full definition of a specific tool."""
     output: OutputHandler = ctx.obj["output"]
     config = get_config(ctx)
@@ -135,11 +186,15 @@ def inspect(ctx: click.Context, server: str, tool: str):
     if not tool_info:
         output.error(
             ValueError(f"Tool '{tool}' not found on server '{server}'"),
-            help_text=f"Use 'mcp search {tool}' to find available tools.",
+            help_text=f"Use 'mcpl search {tool}' to find available tools.",
         )
         return
 
-    output.success(tool_info.to_dict())
+    result = tool_info.to_dict()
+    if example:
+        result["exampleCall"] = tool_info.get_example_call()
+
+    output.success(result)
 
 
 @main.command()

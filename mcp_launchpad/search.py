@@ -31,6 +31,7 @@ class SearchResult:
             "server": self.tool.server,
             "tool": self.tool.name,
             "description": self.tool.description,
+            "requiredParams": self.tool.get_required_params(),
             "score": round(self.score, 3),
         }
 

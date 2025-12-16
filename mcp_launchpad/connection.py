@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import sys
+import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -42,6 +44,59 @@ class ToolInfo:
             "description": self.description,
             "inputSchema": self.input_schema,
         }
+
+    def get_required_params(self) -> list[str]:
+        """Extract required parameter names from input schema."""
+        return self.input_schema.get("required", [])
+
+    def get_params_summary(self) -> str:
+        """Get a brief summary of required and optional parameters.
+
+        Returns a string like: "organizationSlug, query | Optional: limit, offset"
+        """
+        required = self.get_required_params()
+        properties = self.input_schema.get("properties", {})
+
+        # Get optional params (in properties but not required)
+        optional = [p for p in properties if p not in required]
+
+        parts = []
+        if required:
+            parts.append(", ".join(required))
+        if optional:
+            # Show first 3 optional params with "..." if more
+            shown = optional[:3]
+            suffix = ", ..." if len(optional) > 3 else ""
+            parts.append(f"Optional: {', '.join(shown)}{suffix}")
+
+        return " | ".join(parts) if parts else "No parameters"
+
+    def get_example_call(self) -> str:
+        """Generate an example CLI call for this tool."""
+        required = self.get_required_params()
+        properties = self.input_schema.get("properties", {})
+
+        # Build example arguments
+        example_args = {}
+        for param in required:
+            prop = properties.get(param, {})
+            param_type = prop.get("type", "string")
+            if param_type == "string":
+                example_args[param] = f"<{param}>"
+            elif param_type == "number" or param_type == "integer":
+                example_args[param] = 0
+            elif param_type == "boolean":
+                example_args[param] = True
+            elif param_type == "array":
+                example_args[param] = []
+            elif param_type == "object":
+                example_args[param] = {}
+            else:
+                example_args[param] = f"<{param}>"
+
+        import json
+        args_json = json.dumps(example_args)
+        return f"mcpl call {self.server} {self.name} '{args_json}'"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ToolInfo":
@@ -105,27 +160,44 @@ class ConnectionManager:
             env=env,
         )
 
-        try:
-            async with asyncio.timeout(CONNECTION_TIMEOUT):
-                async with stdio_client(server_params) as (read, write):
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        yield session
-        except asyncio.TimeoutError:
-            raise TimeoutError(
-                f"Connection to '{server_name}' timed out after {CONNECTION_TIMEOUT}s.\n\n"
-                f"The server may be slow to start or unresponsive.\n\n"
-                f"Command: {server_config.command} {' '.join(server_config.args)}\n\n"
-                f"Try running the command manually to debug."
-            )
-        except FileNotFoundError as e:
-            raise FileNotFoundError(
-                f"Could not start '{server_name}' server.\n\n"
-                f"Command not found: {server_config.command}\n\n"
-                f"Make sure the MCP server is installed:\n"
-                f"  - For uvx: uv tool install {server_config.args[0] if server_config.args else 'package-name'}\n"
-                f"  - For npx: npm install -g {server_config.args[1] if len(server_config.args) > 1 else 'package-name'}"
-            ) from e
+        # Use a temp file to capture stderr - we'll show it only on errors
+        # This is needed because MCP's stdio_client requires a real file descriptor
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".stderr", delete=True) as stderr_file:
+            try:
+                async with asyncio.timeout(CONNECTION_TIMEOUT):
+                    async with stdio_client(server_params, errlog=stderr_file) as (read, write):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            yield session
+            except asyncio.TimeoutError:
+                stderr_file.seek(0)
+                stderr_output = stderr_file.read()
+                stderr_info = f"\n\nServer output:\n{stderr_output}" if stderr_output.strip() else ""
+                raise TimeoutError(
+                    f"Connection to '{server_name}' timed out after {CONNECTION_TIMEOUT}s.\n\n"
+                    f"The server may be slow to start or unresponsive.\n\n"
+                    f"Command: {server_config.command} {' '.join(server_config.args)}"
+                    f"{stderr_info}\n\n"
+                    f"Try running the command manually to debug."
+                )
+            except FileNotFoundError as e:
+                raise FileNotFoundError(
+                    f"Could not start '{server_name}' server.\n\n"
+                    f"Command not found: {server_config.command}\n\n"
+                    f"Make sure the MCP server is installed:\n"
+                    f"  - For uvx: uv tool install {server_config.args[0] if server_config.args else 'package-name'}\n"
+                    f"  - For npx: npm install -g {server_config.args[1] if len(server_config.args) > 1 else 'package-name'}"
+                ) from e
+            except Exception as e:
+                # For any other errors, include stderr output if available
+                stderr_file.seek(0)
+                stderr_output = stderr_file.read()
+                if stderr_output.strip():
+                    # Append stderr to the error message
+                    raise type(e)(
+                        f"{e}\n\nServer output:\n{stderr_output}"
+                    ) from e
+                raise
 
     async def list_tools(self, server_name: str) -> list[ToolInfo]:
         """List all tools from a specific server."""
