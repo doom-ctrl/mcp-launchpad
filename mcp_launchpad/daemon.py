@@ -131,7 +131,7 @@ class Daemon:
 
             server_params = StdioServerParameters(
                 command=server_config.command,
-                args=server_config.args,
+                args=server_config.get_resolved_args(),
                 env=env,
             )
 

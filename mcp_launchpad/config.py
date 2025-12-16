@@ -2,11 +2,32 @@
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+
+
+def _resolve_env_vars(value: str) -> str:
+    """Resolve ${VAR} patterns in a string from environment variables.
+
+    Handles:
+    - Full replacement: "${VAR}" -> "value"
+    - Partial replacement: "prefix_${VAR}_suffix" -> "prefix_value_suffix"
+    - Multiple vars: "${VAR1}_${VAR2}" -> "value1_value2"
+    - Missing vars resolve to empty string
+    """
+    if "${" not in value:
+        return value
+
+    result = value
+    for match in re.finditer(r'\$\{([^}]+)\}', value):
+        env_var = match.group(1)
+        env_value = os.environ.get(env_var, "")
+        result = result.replace(match.group(0), env_value)
+    return result
 
 
 @dataclass
@@ -20,14 +41,11 @@ class ServerConfig:
 
     def get_resolved_env(self) -> dict[str, str]:
         """Resolve environment variables, expanding ${VAR} references."""
-        resolved = {}
-        for key, value in self.env.items():
-            if value.startswith("${") and value.endswith("}"):
-                env_var = value[2:-1]
-                resolved[key] = os.environ.get(env_var, "")
-            else:
-                resolved[key] = value
-        return resolved
+        return {key: _resolve_env_vars(value) for key, value in self.env.items()}
+
+    def get_resolved_args(self) -> list[str]:
+        """Resolve environment variables in args, expanding ${VAR} references."""
+        return [_resolve_env_vars(arg) for arg in self.args]
 
 
 @dataclass

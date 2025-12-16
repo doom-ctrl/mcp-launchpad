@@ -91,6 +91,125 @@ class TestServerConfig:
                 "MISSING": "",
             }
 
+    def test_get_resolved_env_partial_substitution(self):
+        """Test resolving partial variable substitution in env values."""
+        with patch.dict(os.environ, {"HOST": "localhost", "PORT": "8080"}, clear=True):
+            config = ServerConfig(
+                name="test",
+                command="python",
+                env={
+                    "URL": "http://${HOST}:${PORT}/api",
+                    "PREFIX": "prefix_${HOST}",
+                    "SUFFIX": "${PORT}_suffix",
+                },
+            )
+            resolved = config.get_resolved_env()
+            assert resolved == {
+                "URL": "http://localhost:8080/api",
+                "PREFIX": "prefix_localhost",
+                "SUFFIX": "8080_suffix",
+            }
+
+    def test_get_resolved_args_static_values(self):
+        """Test resolving static arg values."""
+        config = ServerConfig(
+            name="test",
+            command="python",
+            args=["-m", "server", "--port", "8080"],
+        )
+        resolved = config.get_resolved_args()
+        assert resolved == ["-m", "server", "--port", "8080"]
+
+    def test_get_resolved_args_variable_substitution(self):
+        """Test resolving arg variable references."""
+        with patch.dict(os.environ, {"MY_TOKEN": "secret-token"}, clear=True):
+            config = ServerConfig(
+                name="test",
+                command="python",
+                args=["--token", "${MY_TOKEN}"],
+            )
+            resolved = config.get_resolved_args()
+            assert resolved == ["--token", "secret-token"]
+
+    def test_get_resolved_args_missing_variable(self):
+        """Test resolving missing arg variable returns empty string."""
+        with patch.dict(os.environ, {}, clear=True):
+            config = ServerConfig(
+                name="test",
+                command="python",
+                args=["--token", "${NONEXISTENT_VAR}"],
+            )
+            resolved = config.get_resolved_args()
+            assert resolved == ["--token", ""]
+
+    def test_get_resolved_args_partial_substitution(self):
+        """Test resolving partial variable substitution in args."""
+        with patch.dict(os.environ, {"HOST": "localhost", "PORT": "8080"}, clear=True):
+            config = ServerConfig(
+                name="test",
+                command="python",
+                args=[
+                    "--url",
+                    "http://${HOST}:${PORT}/api",
+                    "--header",
+                    "Authorization: Bearer ${TOKEN}",
+                ],
+            )
+            resolved = config.get_resolved_args()
+            assert resolved == [
+                "--url",
+                "http://localhost:8080/api",
+                "--header",
+                "Authorization: Bearer ",  # Missing TOKEN resolves to empty
+            ]
+
+    def test_get_resolved_args_mixed_values(self):
+        """Test resolving mixed static and variable args."""
+        with patch.dict(os.environ, {"TOKEN": "abc123"}, clear=True):
+            config = ServerConfig(
+                name="test",
+                command="npx",
+                args=[
+                    "-y",
+                    "@supabase/mcp-server",
+                    "--access-token",
+                    "${TOKEN}",
+                ],
+            )
+            resolved = config.get_resolved_args()
+            assert resolved == [
+                "-y",
+                "@supabase/mcp-server",
+                "--access-token",
+                "abc123",
+            ]
+
+    def test_get_resolved_env_remapped_variable(self):
+        """Test remapping env var to different name for subprocess."""
+        with patch.dict(os.environ, {"A_API_KEY": "secret123"}, clear=True):
+            config = ServerConfig(
+                name="test",
+                command="python",
+                env={
+                    "MY_API_KEY": "${A_API_KEY}",  # Remap A_API_KEY -> MY_API_KEY
+                },
+            )
+            resolved = config.get_resolved_env()
+            assert resolved == {"MY_API_KEY": "secret123"}
+
+    def test_get_resolved_env_literal_without_braces(self):
+        """Test that values without ${} are treated as literals."""
+        with patch.dict(os.environ, {"A_API_KEY": "secret123"}, clear=True):
+            config = ServerConfig(
+                name="test",
+                command="python",
+                env={
+                    "MY_API_KEY": "A_API_KEY",  # No ${} = literal string
+                },
+            )
+            resolved = config.get_resolved_env()
+            assert resolved == {"MY_API_KEY": "A_API_KEY"}  # Literal, not resolved
+
 
 class TestFindConfigFile:
     """Tests for find_config_file function."""
