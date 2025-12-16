@@ -12,7 +12,9 @@ from .config import Config
 from .ipc import IPCMessage, connect_to_daemon, read_message, write_message
 from .platform import (
     IS_WINDOWS,
+    get_log_file_path,
     get_pid_file_path,
+    get_session_id,
     get_socket_path,
     is_process_alive,
 )
@@ -107,9 +109,28 @@ class SessionClient:
                 return
             await asyncio.sleep(DAEMON_CONNECT_RETRY_DELAY)
 
-        raise RuntimeError(
-            f"Daemon failed to start within {DAEMON_START_TIMEOUT} seconds"
-        )
+        # Daemon failed to start - provide helpful error message
+        log_file = get_log_file_path()
+        error_msg = f"Daemon failed to start within {DAEMON_START_TIMEOUT} seconds"
+
+        # Try to read the last few lines of the log file for context
+        if log_file.exists():
+            try:
+                with open(log_file, "r") as f:
+                    lines = f.readlines()
+                    if lines:
+                        # Get last 10 lines (or fewer if file is smaller)
+                        tail_lines = lines[-10:]
+                        log_tail = "".join(tail_lines).strip()
+                        error_msg += f"\n\nDaemon log (last lines from {log_file}):\n{log_tail}"
+                    else:
+                        error_msg += f"\n\nLog file is empty. Check {log_file} for details."
+            except Exception:
+                error_msg += f"\n\nCheck daemon log at: {log_file}"
+        else:
+            error_msg += f"\n\nLog file not found at: {log_file}"
+
+        raise RuntimeError(error_msg)
 
     async def _is_daemon_running(self) -> bool:
         """Check if the daemon is currently running."""
@@ -148,6 +169,16 @@ class SessionClient:
         if self.config.config_path:
             daemon_cmd.extend(["--config", str(self.config.config_path)])
 
+        # Ensure daemon uses the same session ID as client
+        # This is critical so they use the same socket/pid/log file paths
+        daemon_env = os.environ.copy()
+        daemon_env["MCPL_SESSION_ID"] = get_session_id()
+
+        # Open log file for daemon output
+        log_file = get_log_file_path()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = open(log_file, "w")
+
         # Start as detached process
         if IS_WINDOWS:
             # Windows: Use CREATE_NEW_PROCESS_GROUP and DETACHED_PROCESS
@@ -155,17 +186,19 @@ class SessionClient:
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             subprocess.Popen(
                 daemon_cmd,
+                env=daemon_env,
                 creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=log_handle,
                 stdin=subprocess.DEVNULL,
             )
         else:
             # Unix: Use double-fork or nohup pattern
             subprocess.Popen(
                 daemon_cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                env=daemon_env,
+                stdout=log_handle,
+                stderr=log_handle,
                 stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )

@@ -68,6 +68,19 @@ def get_pid_file_path() -> Path:
         return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.pid"
 
 
+def get_log_file_path() -> Path:
+    """Get the path for the daemon log file."""
+    session_id = get_session_id()
+
+    if IS_WINDOWS:
+        username = os.environ.get("USERNAME", "user")
+        temp_dir = Path(tempfile.gettempdir())
+        return temp_dir / f"mcpl-{username}-{session_id}.log"
+    else:
+        uid = os.getuid()
+        return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.log"
+
+
 def is_process_alive(pid: int) -> bool:
     """Check if a process with the given PID is still running.
 

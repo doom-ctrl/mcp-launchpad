@@ -256,7 +256,19 @@ class Daemon:
             if server_state and server_state.connected and server_state.session:
                 return server_state
             if server_state and server_state.error:
-                raise RuntimeError(f"Server '{server_name}' connection failed: {server_state.error}")
+                error_msg = f"Server '{server_name}' connection failed: {server_state.error}"
+                # Include stderr output if available
+                if server_state.stderr_file:
+                    try:
+                        stderr_path = Path(server_state.stderr_file.name)
+                        if stderr_path.exists():
+                            with open(stderr_path, "r") as f:
+                                stderr_content = f.read().strip()
+                                if stderr_content:
+                                    error_msg += f"\n\nServer stderr output:\n{stderr_content}"
+                    except Exception:
+                        pass  # If we can't read stderr, just use the basic error
+                raise RuntimeError(error_msg)
             await asyncio.sleep(0.1)
 
         raise RuntimeError(f"Server '{server_name}' connection timed out")
