@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .config import Config
 from .connection import ConnectionManager, ToolInfo
@@ -120,8 +120,19 @@ class ToolCache:
             return []
         return self._load_tools()
 
-    async def refresh(self, force: bool = False) -> list[ToolInfo]:
-        """Refresh the tool cache by connecting to all servers."""
+    async def refresh(
+        self,
+        force: bool = False,
+        on_progress: Callable[[str, str, int | None, str | None], None] | None = None,
+    ) -> list[ToolInfo]:
+        """Refresh the tool cache by connecting to all servers.
+
+        Args:
+            force: Force refresh even if cache is valid
+            on_progress: Optional callback for progress updates.
+                Called with (server_name, status, tool_count, error_message)
+                where status is "connecting", "done", or "error"
+        """
         if not force and self.is_cache_valid():
             return self._load_tools()
 
@@ -131,12 +142,18 @@ class ToolCache:
         errors: list[str] = []
 
         for server_name in self.config.servers:
+            if on_progress:
+                on_progress(server_name, "connecting", None, None)
             try:
                 tools = await manager.list_tools(server_name)
                 all_tools.extend(tools)
                 server_times[server_name] = datetime.now().isoformat()
+                if on_progress:
+                    on_progress(server_name, "done", len(tools), None)
             except Exception as e:
                 errors.append(f"{server_name}: {e}")
+                if on_progress:
+                    on_progress(server_name, "error", None, str(e).split("\n")[0])
 
         # Save cache even if some servers failed
         self._save_tools(all_tools)

@@ -345,10 +345,35 @@ def list_cmd(ctx: click.Context, server: str | None, refresh: bool) -> None:
 
     # Refresh cache if requested
     if refresh:
+        if not ctx.obj["json_mode"]:
+            click.secho("\nRefreshing tool cache...\n", bold=True)
+
+        def on_progress(
+            server_name: str, status: str, tool_count: int | None, error: str | None
+        ) -> None:
+            """Display progress updates during cache refresh."""
+            if ctx.obj["json_mode"]:
+                return
+            if status == "connecting":
+                click.secho(f"  [{server_name}] ", fg="cyan", nl=False)
+                click.secho("connecting...", fg="yellow")
+            elif status == "done":
+                # Move cursor up one line and overwrite
+                click.echo("\033[A\033[K", nl=False)
+                click.secho(f"  [{server_name}] ", fg="cyan", nl=False)
+                click.secho("OK", fg="green", nl=False)
+                click.echo(f" ({tool_count} tools)")
+            elif status == "error":
+                # Move cursor up one line and overwrite
+                click.echo("\033[A\033[K", nl=False)
+                click.secho(f"  [{server_name}] ", fg="cyan", nl=False)
+                click.secho("FAILED", fg="red", nl=False)
+                click.echo(f" - {error}")
+
         try:
-            asyncio.run(cache.refresh(force=True))
+            asyncio.run(cache.refresh(force=True, on_progress=on_progress))
             if not ctx.obj["json_mode"]:
-                click.secho("Tool cache refreshed.", fg="green")
+                click.secho("\nTool cache refreshed.", fg="green")
         except Exception as e:
             output.error(e, help_text="Failed to refresh tool cache.")
             return
@@ -586,3 +611,69 @@ def verify(ctx: click.Context, timeout: int) -> None:
             for r in results:
                 if r["status"] != "ok":
                     click.echo(f"  mcpl list {r['server']} --refresh")
+
+
+@main.command("config")
+@click.option("--show-secrets", is_flag=True, help="Show actual values of environment variables (use with caution)")
+@click.pass_context
+def show_config(ctx: click.Context, show_secrets: bool) -> None:
+    """Show the current MCP configuration.
+
+    Displays the config file path, env file path, and all configured
+    servers with their commands, arguments, and environment variables.
+    """
+    output: OutputHandler = ctx.obj["output"]
+    config = get_config(ctx)
+
+    if ctx.obj["json_mode"]:
+        servers_data = {}
+        for name, server in config.servers.items():
+            server_info: dict[str, Any] = {
+                "command": server.command,
+                "args": server.args,
+            }
+            if show_secrets:
+                server_info["env"] = server.get_resolved_env()
+            else:
+                # Mask env values
+                server_info["env"] = {k: "***" if v else "" for k, v in server.env.items()}
+            servers_data[name] = server_info
+
+        output.success({
+            "configPath": str(config.config_path) if config.config_path else None,
+            "envPath": str(config.env_path) if config.env_path else None,
+            "servers": servers_data,
+        })
+    else:
+        click.secho("\nMCP Configuration\n", bold=True)
+        click.echo(f"  Config file: {config.config_path or 'Not found'}")
+        click.echo(f"  Env file: {config.env_path or 'Not found'}")
+
+        click.secho("\nConfigured Servers:\n", bold=True)
+        for name, server in config.servers.items():
+            click.secho(f"  [{name}]", fg="cyan", bold=True)
+            click.echo(f"    command: {server.command}")
+            if server.args:
+                click.echo(f"    args: {' '.join(server.args)}")
+
+            if server.env:
+                click.echo("    env:")
+                if show_secrets:
+                    resolved = server.get_resolved_env()
+                    for key, value in server.env.items():
+                        resolved_value = resolved.get(key, "")
+                        if "${" in value:
+                            # Show both template and resolved value
+                            click.secho(f"      {key}: ", nl=False)
+                            click.secho(f"{resolved_value}", fg="yellow")
+                        else:
+                            click.echo(f"      {key}: {value}")
+                else:
+                    for key, value in server.env.items():
+                        if "${" in value:
+                            # Show it's a variable reference
+                            click.echo(f"      {key}: {value}")
+                        else:
+                            # Mask literal values
+                            click.echo(f"      {key}: ***")
+            click.echo()
