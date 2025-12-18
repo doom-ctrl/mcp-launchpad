@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import struct
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -11,6 +12,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Awaitable
 
 from .platform import IS_WINDOWS, get_socket_path
+
+# Logger for IPC debugging
+logger = logging.getLogger("mcpl.ipc")
 
 if TYPE_CHECKING:
     pass
@@ -43,14 +47,25 @@ class IPCMessage:
 
 
 async def read_message(reader: asyncio.StreamReader) -> IPCMessage | None:
-    """Read a length-prefixed message from the stream."""
-    header = await reader.read(HEADER_SIZE)
-    if len(header) < HEADER_SIZE:
+    """Read a length-prefixed message from the stream.
+
+    Uses readexactly() to ensure we read the complete message, even if
+    the data arrives in multiple chunks over the socket.
+    """
+    try:
+        # Read exactly HEADER_SIZE bytes for the length prefix
+        header = await reader.readexactly(HEADER_SIZE)
+    except asyncio.IncompleteReadError:
+        # Connection closed before header was fully received (e.g., ping check)
         return None
 
     (length,) = struct.unpack(">I", header)
-    data = await reader.read(length)
-    if len(data) < length:
+
+    try:
+        # Read exactly 'length' bytes for the message body
+        data = await reader.readexactly(length)
+    except asyncio.IncompleteReadError as e:
+        logger.warning(f"Connection closed during message read: got {len(e.partial)} of {length} bytes")
         return None
 
     return IPCMessage.from_bytes(data)
@@ -109,8 +124,19 @@ class UnixIPCServer(IPCServer):
         try:
             message = await read_message(reader)
             if message:
-                response = await self.handler(message)
-                await write_message(writer, response)
+                try:
+                    response = await self.handler(message)
+                    await write_message(writer, response)
+                except Exception as e:
+                    logger.exception(f"Error in IPC handler: {e}")
+                    # Send error response to client instead of silently closing
+                    error_response = IPCMessage(action="error", payload={"error": str(e)})
+                    try:
+                        await write_message(writer, error_response)
+                    except Exception:
+                        pass  # Connection may already be broken
+        except Exception as e:
+            logger.exception(f"Error handling IPC client: {e}")
         finally:
             writer.close()
             await writer.wait_closed()

@@ -174,15 +174,32 @@ class Daemon:
                         return
 
             except asyncio.TimeoutError:
-                server_state.error = f"Connection timed out after {CONNECTION_TIMEOUT}s"
+                server_state.error = (
+                    f"Connection timed out after {CONNECTION_TIMEOUT}s. "
+                    f"The server may be slow to initialize or unresponsive."
+                )
                 logger.error(f"Server {server_name}: {server_state.error}")
             except FileNotFoundError:
-                server_state.error = f"Command not found: {server_config.command}"
-                logger.error(f"Server {server_name}: {server_state.error}")
+                server_state.error = (
+                    f"Command not found: '{server_config.command}'\n"
+                    "Ensure the server package is installed. Common fixes:\n"
+                    "  - For uvx servers: uvx install <package-name>\n"
+                    "  - For npx servers: npm install -g <package-name>\n"
+                    "  - Check your PATH environment variable"
+                )
+                logger.error(f"Server {server_name}: Command not found: {server_config.command}")
                 # Don't retry if command not found
                 return
             except Exception as e:
-                server_state.error = str(e)
+                error_str = str(e)
+                # Provide more context for common errors
+                if "unhandled errors in a TaskGroup" in error_str:
+                    server_state.error = (
+                        f"Server crashed during initialization: {error_str}\n"
+                        "This usually indicates a bug in the MCP server or missing dependencies."
+                    )
+                else:
+                    server_state.error = error_str
                 logger.error(f"Server {server_name} error: {e}")
             finally:
                 server_state.connected = False
@@ -238,7 +255,12 @@ class Daemon:
     async def _ensure_server_connected(self, server_name: str) -> ServerState:
         """Ensure a server is connected, starting connection if needed."""
         if server_name not in self.state.config.servers:
-            raise ValueError(f"Server '{server_name}' not found in configuration")
+            available = list(self.state.config.servers.keys())
+            raise ValueError(
+                f"Server '{server_name}' not found in configuration.\n"
+                f"Available servers: {', '.join(available) if available else '(none)'}\n\n"
+                "Use 'mcpl list' to see all configured servers."
+            )
 
         server_state = self.state.servers.get(server_name)
 
@@ -271,7 +293,19 @@ class Daemon:
                 raise RuntimeError(error_msg)
             await asyncio.sleep(0.1)
 
-        raise RuntimeError(f"Server '{server_name}' connection timed out")
+        # Connection timed out - provide helpful error message
+        server_config = self.state.config.servers.get(server_name)
+        cmd_info = f"Command: {server_config.command}" if server_config else ""
+        raise RuntimeError(
+            f"Server '{server_name}' connection timed out after {CONNECTION_TIMEOUT}s\n"
+            f"{cmd_info}\n\n"
+            "The MCP server process may be slow to start or unresponsive.\n\n"
+            "Try:\n"
+            "  1. Run 'mcpl verify' to test the server connection directly\n"
+            "  2. Check that the server command and dependencies are installed\n"
+            "  3. Check required environment variables with 'mcpl config --show-secrets'\n"
+            f"  4. Increase timeout: MCPL_CONNECTION_TIMEOUT={CONNECTION_TIMEOUT * 2}"
+        )
 
     async def _call_tool(
         self, server_name: str, tool_name: str, arguments: dict[str, Any]

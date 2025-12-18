@@ -237,7 +237,13 @@ def inspect(ctx: click.Context, server: str, tool: str, example: bool) -> None:
             server_tools = asyncio.run(manager.list_tools(server))
             tool_info = next((t for t in server_tools if t.name == tool), None)
         except Exception as e:
-            output.error(e)
+            output.error(
+                e,
+                help_text=(
+                    f"Failed to connect to server '{server}'.\n"
+                    "Try 'mcpl verify' to check server connections."
+                ),
+            )
             return
 
     if not tool_info:
@@ -327,7 +333,18 @@ def call(ctx: click.Context, server: str, tool: str, arguments: str | None, stdi
 
         output.success({"result": result_data})
     except Exception as e:
-        output.error(e)
+        # The error message from daemon/connection already includes context
+        # Only add help text if not already present in the error message
+        error_str = str(e)
+        error_lower = error_str.lower()
+        help_text = None
+
+        # Only add suggestions if the error message doesn't already contain them
+        if "no response from daemon" in error_lower or "failed to connect to daemon" in error_lower:
+            if "--no-daemon" not in error_str:
+                help_text = "Try using --no-daemon flag to bypass the daemon."
+
+        output.error(e, help_text=help_text)
 
 
 @main.command("list")
@@ -401,7 +418,15 @@ def list_cmd(ctx: click.Context, server: str | None, refresh: bool) -> None:
             try:
                 server_tools = asyncio.run(manager.list_tools(server))
             except Exception as e:
-                output.error(e)
+                output.error(
+                    e,
+                    help_text=(
+                        f"Failed to list tools from server '{server}'.\n"
+                        "Try:\n"
+                        "  1. Run 'mcpl verify' to check server connections\n"
+                        "  2. Run 'mcpl list' to see all configured servers"
+                    ),
+                )
                 return
 
         if ctx.obj["json_mode"]:
@@ -520,7 +545,10 @@ def session_status(ctx: click.Context) -> None:
             else:
                 click.echo("Session daemon is not running.")
         else:
-            output.error(e)
+            output.error(
+                e,
+                help_text="Run 'mcpl session stop' and retry if the daemon is in a bad state.",
+            )
 
 
 @session.command("stop")
@@ -544,7 +572,13 @@ def session_stop(ctx: click.Context) -> None:
             else:
                 click.echo("Session daemon was not running.")
         else:
-            output.error(e)
+            output.error(
+                e,
+                help_text=(
+                    "Failed to stop the daemon cleanly.\n"
+                    "The daemon may have crashed. Socket and PID files will be cleaned up on next run."
+                ),
+            )
 
 
 @main.command()

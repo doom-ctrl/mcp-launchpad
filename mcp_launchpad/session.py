@@ -74,9 +74,16 @@ class SessionClient:
         await self._ensure_daemon_running()
 
         # Connect and send request
+        socket_path = get_socket_path()
         connection = await connect_to_daemon()
         if not connection:
-            raise RuntimeError("Failed to connect to daemon")
+            raise RuntimeError(
+                f"Failed to connect to daemon socket at {socket_path}\n\n"
+                "The daemon process may have crashed. Try:\n"
+                "  1. Run 'mcpl session stop' to clean up\n"
+                "  2. Retry your command\n"
+                "  3. Use --no-daemon flag to bypass the daemon entirely"
+            )
 
         reader, writer = connection
         try:
@@ -84,10 +91,28 @@ class SessionClient:
             response = await read_message(reader)
 
             if not response:
-                raise RuntimeError("No response from daemon")
+                log_file = get_log_file_path()
+                raise RuntimeError(
+                    f"No response from daemon (connection closed unexpectedly)\n\n"
+                    f"This may indicate the daemon crashed while processing the request.\n"
+                    f"Check daemon log at: {log_file}\n\n"
+                    "Try:\n"
+                    "  1. Run 'mcpl session stop' to clean up\n"
+                    "  2. Retry your command\n"
+                    "  3. Use --no-daemon flag to bypass the daemon"
+                )
 
             if response.action == "error":
-                raise RuntimeError(response.payload.get("error", "Unknown error"))
+                error_msg = response.payload.get("error", "Unknown error")
+                # Add recovery suggestions for common errors (only if not already present)
+                if "connection timed out" in error_msg.lower() and "MCPL_CONNECTION_TIMEOUT" not in error_msg:
+                    error_msg += (
+                        "\n\nThe MCP server took too long to connect. Try:\n"
+                        "  1. Check if the server command is correct in your config\n"
+                        "  2. Increase timeout with MCPL_CONNECTION_TIMEOUT env var\n"
+                        "  3. Use --no-daemon to get more detailed error output"
+                    )
+                raise RuntimeError(error_msg)
 
             return response
         finally:
@@ -111,9 +136,11 @@ class SessionClient:
 
         # Daemon failed to start - provide helpful error message
         log_file = get_log_file_path()
+        socket_path = get_socket_path()
         error_msg = f"Daemon failed to start within {DAEMON_START_TIMEOUT} seconds"
 
         # Try to read the last few lines of the log file for context
+        log_context = ""
         if log_file.exists():
             try:
                 with open(log_file, "r") as f:
@@ -121,14 +148,27 @@ class SessionClient:
                     if lines:
                         # Get last 10 lines (or fewer if file is smaller)
                         tail_lines = lines[-10:]
-                        log_tail = "".join(tail_lines).strip()
-                        error_msg += f"\n\nDaemon log (last lines from {log_file}):\n{log_tail}"
-                    else:
-                        error_msg += f"\n\nLog file is empty. Check {log_file} for details."
+                        log_context = "".join(tail_lines).strip()
             except Exception:
-                error_msg += f"\n\nCheck daemon log at: {log_file}"
+                pass
+
+        if log_context:
+            error_msg += f"\n\nDaemon log (last lines from {log_file}):\n{log_context}"
         else:
-            error_msg += f"\n\nLog file not found at: {log_file}"
+            error_msg += f"\n\nNo daemon log available at: {log_file}"
+
+        error_msg += (
+            f"\n\nSocket path: {socket_path}\n\n"
+            "Possible causes:\n"
+            "  - MCP server commands may be invalid or missing dependencies\n"
+            "  - Environment variables may not be set correctly\n"
+            "  - Another process may be using the socket\n\n"
+            "Try:\n"
+            "  1. Run 'mcpl verify' to test server connections\n"
+            "  2. Run 'mcpl config' to check your configuration\n"
+            "  3. Use --no-daemon flag to bypass the daemon\n"
+            f"  4. Increase timeout: MCPL_DAEMON_START_TIMEOUT={DAEMON_START_TIMEOUT * 2}"
+        )
 
         raise RuntimeError(error_msg)
 
