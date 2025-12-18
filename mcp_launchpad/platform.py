@@ -37,6 +37,24 @@ def is_ide_environment() -> bool:
     return False
 
 
+def get_ide_session_anchor() -> Path | None:
+    """Get the file/socket that anchors this IDE session.
+
+    Returns a path that exists while the IDE session is active. When the IDE
+    closes, this path will no longer exist. Used by the daemon to detect when
+    the IDE session ends so it can shut down cleanly.
+
+    Returns None if not in an IDE environment or no anchor can be determined.
+    """
+    # VS Code Git IPC socket - disappears when VS Code closes
+    if git_ipc := os.environ.get("VSCODE_GIT_IPC_HANDLE"):
+        path = Path(git_ipc)
+        if path.exists():
+            return path
+
+    return None
+
+
 def get_session_id() -> str:
     """Get a unique identifier for the current terminal session.
 

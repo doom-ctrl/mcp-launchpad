@@ -9,6 +9,7 @@ import pytest
 
 from mcp_launchpad.platform import (
     IS_WINDOWS,
+    get_ide_session_anchor,
     get_parent_pid,
     get_pid_file_path,
     get_session_id,
@@ -59,6 +60,32 @@ class TestIsIdeEnvironment:
 
         monkeypatch.setenv("VSCODE_INJECTION", "1")
         assert is_ide_environment() is True
+
+
+class TestGetIdeSessionAnchor:
+    """Tests for get_ide_session_anchor function."""
+
+    def test_returns_none_when_no_ide(self, monkeypatch):
+        """Test that None is returned when not in an IDE environment."""
+        monkeypatch.delenv("VSCODE_GIT_IPC_HANDLE", raising=False)
+        assert get_ide_session_anchor() is None
+
+    def test_returns_vscode_socket_path_if_exists(self, monkeypatch, tmp_path):
+        """Test that VS Code socket path is returned when it exists."""
+        # Create a fake socket file
+        socket_file = tmp_path / "vscode-git-abc123.sock"
+        socket_file.touch()
+
+        monkeypatch.setenv("VSCODE_GIT_IPC_HANDLE", str(socket_file))
+        result = get_ide_session_anchor()
+        assert result == socket_file
+
+    def test_returns_none_if_vscode_socket_missing(self, monkeypatch, tmp_path):
+        """Test that None is returned if VS Code socket doesn't exist."""
+        # Point to non-existent socket
+        socket_file = tmp_path / "nonexistent.sock"
+        monkeypatch.setenv("VSCODE_GIT_IPC_HANDLE", str(socket_file))
+        assert get_ide_session_anchor() is None
 
 
 class TestGetSessionId:

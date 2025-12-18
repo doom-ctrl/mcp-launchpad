@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO, cast
@@ -19,8 +20,10 @@ from .config import Config, load_config
 from .ipc import IPCMessage, create_ipc_server
 from .platform import (
     IS_WINDOWS,
+    get_ide_session_anchor,
     get_parent_pid,
     get_pid_file_path,
+    get_socket_path,
     is_ide_environment,
     is_process_alive,
 )
@@ -39,6 +42,13 @@ RECONNECT_DELAY = int(os.environ.get("MCPL_RECONNECT_DELAY", "5"))
 
 # Maximum reconnection attempts before giving up
 MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MCPL_MAX_RECONNECT_ATTEMPTS", "3"))
+
+# Idle timeout for daemon shutdown (seconds) - 0 to disable
+# In IDE environments, daemon shuts down after this period of inactivity
+IDLE_TIMEOUT = int(os.environ.get("MCPL_IDLE_TIMEOUT", "3600"))  # 1 hour default
+
+# How often to check IDE session anchor (seconds)
+IDE_ANCHOR_CHECK_INTERVAL = int(os.environ.get("MCPL_IDE_ANCHOR_CHECK_INTERVAL", "10"))
 
 
 @dataclass
@@ -62,13 +72,19 @@ class DaemonState:
     servers: dict[str, ServerState] = field(default_factory=dict)
     parent_pid: int = 0
     running: bool = True
+    last_activity: float = field(default_factory=time.time)
+    ide_anchor: Path | None = None
 
 
 class Daemon:
     """The session daemon that maintains persistent MCP connections."""
 
     def __init__(self, config: Config) -> None:
-        self.state = DaemonState(config=config, parent_pid=get_parent_pid())
+        self.state = DaemonState(
+            config=config,
+            parent_pid=get_parent_pid(),
+            ide_anchor=get_ide_session_anchor(),
+        )
         self._ipc_server = create_ipc_server(self._handle_request)
         self._connection_tasks: dict[str, asyncio.Task[None]] = {}
         self._contexts: dict[str, Any] = {}  # Store context managers
@@ -226,6 +242,9 @@ class Daemon:
 
     async def _handle_request(self, message: IPCMessage) -> IPCMessage:
         """Handle an incoming IPC request."""
+        # Update last activity time for idle timeout tracking
+        self.state.last_activity = time.time()
+
         action = message.action
         payload = message.payload
 
@@ -428,22 +447,68 @@ class Daemon:
         }
 
     async def _monitor_parent(self) -> None:
-        """Monitor if parent process is still alive.
+        """Monitor session health and trigger shutdown when appropriate.
 
-        In IDE environments (VS Code, Claude Code), we don't monitor the parent
-        process because each terminal command runs in a separate subprocess.
-        The daemon should stay alive for the entire IDE session until explicitly
-        stopped via 'mcpl session stop' or a signal.
+        Monitors different conditions based on environment:
+        - IDE environments: Monitor IDE session anchor (e.g., VS Code socket) and idle timeout
+        - Regular terminals: Monitor parent process liveness
+
+        This ensures proper cleanup in all scenarios:
+        - Terminal closed: parent PID monitoring
+        - VS Code closed: IDE anchor (socket) disappears
+        - Claude Code closed: IDE anchor or idle timeout
+        - Explicit shutdown: 'mcpl session stop' sets running=False
         """
-        # In IDE environments, don't shut down when parent exits
         if is_ide_environment():
-            logger.info("IDE environment detected - daemon will persist across commands")
-            # Just wait indefinitely (daemon stays alive until signal or explicit stop)
-            while self.state.running:
-                await asyncio.sleep(PARENT_CHECK_INTERVAL)
-            return
+            await self._monitor_ide_session()
+        else:
+            await self._monitor_parent_process()
 
-        # Standard behavior: shut down when parent process dies
+    async def _monitor_ide_session(self) -> None:
+        """Monitor IDE session health for graceful shutdown.
+
+        Checks:
+        1. IDE session anchor (e.g., VS Code Git IPC socket) - if it disappears,
+           the IDE has closed
+        2. Idle timeout - if no requests for IDLE_TIMEOUT seconds, shut down
+        3. Our own socket - if it's been removed, something is wrong
+        """
+        anchor = self.state.ide_anchor
+        socket_path = get_socket_path()
+
+        if anchor:
+            logger.info(f"IDE environment detected - monitoring session anchor: {anchor}")
+        else:
+            logger.info("IDE environment detected - monitoring idle timeout only")
+
+        if IDLE_TIMEOUT > 0:
+            logger.info(f"Idle timeout enabled: {IDLE_TIMEOUT}s")
+
+        while self.state.running:
+            await asyncio.sleep(IDE_ANCHOR_CHECK_INTERVAL)
+
+            # Check if IDE session anchor is gone (VS Code closed)
+            if anchor and not anchor.exists():
+                logger.info(f"IDE session anchor gone ({anchor}), shutting down")
+                self.state.running = False
+                break
+
+            # Check idle timeout
+            if IDLE_TIMEOUT > 0:
+                idle_time = time.time() - self.state.last_activity
+                if idle_time > IDLE_TIMEOUT:
+                    logger.info(f"Idle timeout reached ({idle_time:.0f}s > {IDLE_TIMEOUT}s), shutting down")
+                    self.state.running = False
+                    break
+
+            # Check if our socket was removed (shouldn't happen normally)
+            if not IS_WINDOWS and not socket_path.exists():
+                logger.warning(f"Socket file removed ({socket_path}), shutting down")
+                self.state.running = False
+                break
+
+    async def _monitor_parent_process(self) -> None:
+        """Monitor parent process for regular terminal sessions."""
         while self.state.running:
             await asyncio.sleep(PARENT_CHECK_INTERVAL)
 

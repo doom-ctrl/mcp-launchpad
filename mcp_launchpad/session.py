@@ -176,14 +176,21 @@ class SessionClient:
         """Check if the daemon is currently running."""
         # Check PID file
         pid_file = get_pid_file_path()
+        socket_path = get_socket_path()
+
         if not pid_file.exists():
+            # No PID file - clean up any stale socket file
+            if socket_path.exists():
+                socket_path.unlink(missing_ok=True)
             return False
 
         try:
             pid = int(pid_file.read_text().strip())
             if not is_process_alive(pid):
-                # Stale PID file
+                # Stale PID file - clean up both PID and socket files
                 pid_file.unlink(missing_ok=True)
+                if socket_path.exists():
+                    socket_path.unlink(missing_ok=True)
                 return False
         except (ValueError, OSError):
             return False
