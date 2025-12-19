@@ -9,8 +9,8 @@ You have access to the MCP Launchpad (`mcpl`), a unified CLI for discovering and
 mcpl --help
 
 # Find tools
-mcpl search "<query>"                    # Search all tools (shows required params)
-mcpl search "<query>" --first            # Top result with full details + example call
+mcpl search "<query>"                    # Search all tools (shows required params, returns 5 by default)
+mcpl search "<query>" --limit 10         # Get more results
 mcpl list                                # List all MCP servers
 mcpl list <server>                       # List tools for a server (shows required params)
 
@@ -51,9 +51,9 @@ mcpl list vercel    # Shows all tools with required params
 
 ### Get Example Calls
 
-For complex tools, use `--first` to get a ready-to-use example:
+For complex tools, use `inspect --example` to get a ready-to-use example:
 ```bash
-mcpl search "sentry issues" --first
+mcpl inspect sentry search_issues --example
 # Shows: mcpl call sentry search_issues '{"organizationSlug": "<organizationSlug>", ...}'
 ```
 

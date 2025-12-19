@@ -57,8 +57,8 @@ You can validate installation by running `mcpl list`. If you don't see any serve
 # Find tools matching a query
 mcpl search "github issues"
 
-# Get the top result with full details
-mcpl search "github issues" --first
+# Get more results
+mcpl search "github issues" --limit 10
 ```
 
 ### 3. Execute a tool
@@ -71,13 +71,13 @@ mcpl call github list_issues '{"owner": "anthropics", "repo": "claude-code"}'
 
 ### `mcpl search <query>`
 
-Search for tools across all configured servers.
+Search for tools across all configured servers. Returns 5 results by default.
 
 ```bash
 mcpl search "sentry errors"           # BM25 search (default)
 mcpl search "list.*" --method regex   # Regex search
 mcpl search "create" --method exact   # Exact substring match
-mcpl search "issues" --first          # Top result with example call
+mcpl search "issues" --limit 10       # Get more results
 ```
 
 ### `mcpl list [server]`

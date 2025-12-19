@@ -127,30 +127,6 @@ class TestSearchCommand:
 
             assert "No tools found" in result.output or result.exit_code == 0
 
-    def test_search_first_flag(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
-    ):
-        """Test search with --first flag."""
-        monkeypatch.chdir(tmp_path)
-
-        config_data = {"mcpServers": {"github": {"command": "test"}}}
-        (tmp_path / "mcp.json").write_text(json.dumps(config_data))
-
-        with patch("mcp_launchpad.cli.ToolCache") as MockCache:
-            mock_cache = MagicMock()
-            mock_cache.is_cache_valid.return_value = True
-            mock_cache.get_tools.return_value = sample_tools
-            MockCache.return_value = mock_cache
-
-            # Search for "create_issue" which is a tool name in sample_tools
-            result = runner.invoke(main, ["--json", "search", "--first", "create_issue"])
-
-            assert result.exit_code == 0
-            parsed = json.loads(result.output)
-            assert len(parsed["data"]["results"]) == 1
-            # Should include example call with --first
-            assert "exampleCall" in parsed["data"]["results"][0]
-
     def test_search_invalid_regex(
         self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
     ):
