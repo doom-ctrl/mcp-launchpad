@@ -1,12 +1,11 @@
 """Tool index caching for fast search without connecting to servers."""
 
-import asyncio
 import json
-import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .config import Config
 from .connection import ConnectionManager, ToolInfo
@@ -144,7 +143,9 @@ class ToolCache:
         errors: list[str] = []
 
         # Use provided servers list or default to all servers in config
-        servers_to_refresh = servers if servers is not None else list(self.config.servers.keys())
+        servers_to_refresh = (
+            servers if servers is not None else list(self.config.servers.keys())
+        )
 
         for server_name in servers_to_refresh:
             if on_progress:
@@ -176,4 +177,3 @@ class ToolCache:
             )
 
         return all_tools
-

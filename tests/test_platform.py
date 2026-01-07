@@ -1,9 +1,7 @@
 """Tests for cross-platform utilities."""
 
 import os
-import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -113,7 +111,9 @@ class TestGetSessionId:
         """Test that VS Code Git IPC handle is used for session ID."""
         monkeypatch.delenv("MCPL_SESSION_ID", raising=False)
         monkeypatch.delenv("TERM_SESSION_ID", raising=False)
-        monkeypatch.setenv("VSCODE_GIT_IPC_HANDLE", "/var/folders/xx/vscode-git-abc123def.sock")
+        monkeypatch.setenv(
+            "VSCODE_GIT_IPC_HANDLE", "/var/folders/xx/vscode-git-abc123def.sock"
+        )
         assert get_session_id() == "vscode-abc123def"
 
     def test_uses_claude_code_sse_port(self, monkeypatch):
@@ -254,4 +254,3 @@ class TestGetParentPid:
         """Test that parent PID is not the current process."""
         parent_pid = get_parent_pid()
         assert parent_pid != os.getpid()
-

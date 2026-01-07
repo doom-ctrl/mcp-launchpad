@@ -97,7 +97,7 @@ class OutputHandler:
         """Output a table (human mode only, JSON mode outputs raw data)."""
         if self.json_mode:
             # Convert to list of dicts for JSON
-            data = [dict(zip(headers, row)) for row in rows]
+            data = [dict(zip(headers, row, strict=True)) for row in rows]
             output_json(data)
         else:
             # Calculate column widths
@@ -113,5 +113,6 @@ class OutputHandler:
 
             # Print rows
             for row in rows:
-                click.echo("  ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)))
-
+                click.echo(
+                    "  ".join(str(c).ljust(widths[i]) for i, c in enumerate(row))
+                )

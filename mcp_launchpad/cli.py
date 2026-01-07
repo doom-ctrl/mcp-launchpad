@@ -23,56 +23,73 @@ from .suggestions import (
     find_similar_tools,
     format_tool_suggestions,
     format_validation_error,
-    is_tool_not_found_error,
-    is_validation_error,
 )
 
 # Logger for CLI
 logger = logging.getLogger("mcpl")
 
 
-def _enrich_mcp_errors(
-    result_data: Any, server: str, tool: str, manager: ConnectionManager, config: Config
-) -> Any:
-    """Enrich MCP error messages with helpful suggestions.
+def _check_tool_exists(
+    server: str, tool: str, manager: ConnectionManager
+) -> tuple[bool, list[ToolInfo]]:
+    """Check if a tool exists on a server and get available tools.
 
-    Checks if the result contains a tool-not-found or validation error,
-    and enriches it with similar tool suggestions or schema information.
+    Returns:
+        Tuple of (tool_exists, available_tools)
     """
-    if not isinstance(result_data, str):
-        return result_data
+    try:
+        available_tools = asyncio.run(manager.list_tools(server))
+        tool_exists = any(t.name == tool for t in available_tools)
+        return tool_exists, available_tools
+    except Exception:
+        # If we can't list tools, assume it exists
+        return True, []
 
-    if is_tool_not_found_error(result_data):
-        # Get available tools and suggest similar ones
-        try:
-            available_tools = asyncio.run(manager.list_tools(server))
-            similar = find_similar_tools(tool, available_tools)
-            return format_tool_suggestions(tool, server, similar)
-        except Exception:
-            # If we can't get suggestions, return original error
-            pass
 
-    elif is_validation_error(result_data):
-        # Try to get tool info for better error message
-        try:
-            available_tools = asyncio.run(manager.list_tools(server))
-            tool_info = next((t for t in available_tools if t.name == tool), None)
-            return format_validation_error(tool, server, result_data, tool_info)
-        except Exception:
-            # If we can't enrich, return original error
-            pass
+def _handle_mcp_exception(
+    e: Exception, server: str, tool: str, available_tools: list[ToolInfo]
+) -> dict[str, Any] | None:
+    """Handle MCP protocol exceptions and return enriched error if applicable.
 
-    return result_data
+    Returns:
+        Dict with error info if handled, None otherwise
+    """
+    error_str = str(e)
+
+    # Check for JSON-RPC error codes
+    if "-32601" in error_str:  # Method not found
+        similar = find_similar_tools(tool, available_tools)
+        enriched = format_tool_suggestions(tool, server, similar, error_str)
+        return {"result": enriched, "error": True, "error_type": "tool_not_found"}
+    elif "-32602" in error_str:  # Invalid params
+        tool_info = next((t for t in available_tools if t.name == tool), None)
+        enriched = format_validation_error(tool, server, error_str, tool_info)
+        return {"result": enriched, "error": True, "error_type": "validation_error"}
+
+    return None
 
 
 @click.group()
 @click.option("--json", "json_mode", is_flag=True, help="Output in JSON format")
-@click.option("--config", "config_path", type=click.Path(exists=True), help="Path to MCP config file")
-@click.option("--env-file", "env_path", type=click.Path(exists=True), help="Path to .env file")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    help="Path to MCP config file",
+)
+@click.option(
+    "--env-file", "env_path", type=click.Path(exists=True), help="Path to .env file"
+)
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 @click.version_option(version=__version__)
 @click.pass_context
-def main(ctx: click.Context, json_mode: bool, config_path: str | None, env_path: str | None, verbose: bool) -> None:
+def main(
+    ctx: click.Context,
+    json_mode: bool,
+    config_path: str | None,
+    env_path: str | None,
+    verbose: bool,
+) -> None:
     """MCP Launchpad - Efficiently discover and execute MCP server tools."""
     ctx.ensure_object(dict)
     ctx.obj["json_mode"] = json_mode
@@ -97,24 +114,34 @@ def get_config(ctx: click.Context) -> Config | NoReturn:
         return load_config(ctx.obj["config_path"], ctx.obj["env_path"])
     except FileNotFoundError as e:
         output.error(e, help_text=str(e))
-        raise SystemExit(1)  # Never reached due to sys.exit in output.error
+        raise SystemExit(1) from e  # Never reached due to sys.exit in output.error
     except json.JSONDecodeError as e:
         output.error(
             e,
             error_type="ConfigParseError",
             help_text="The config file contains invalid JSON. Check for syntax errors.",
         )
-        raise SystemExit(1)  # Never reached due to sys.exit in output.error
+        raise SystemExit(1) from e  # Never reached due to sys.exit in output.error
 
 
 @main.command()
 @click.argument("query")
-@click.option("--method", "-m", type=click.Choice(["bm25", "regex", "exact"]), default="bm25", help="Search method")
+@click.option(
+    "--method",
+    "-m",
+    type=click.Choice(["bm25", "regex", "exact"]),
+    default="bm25",
+    help="Search method",
+)
 @click.option("--limit", "-l", default=5, help="Maximum results to return")
 @click.option("--refresh", is_flag=True, help="Refresh the tool cache before searching")
-@click.option("--schema", "-s", is_flag=True, help="Include full input schema in results")
+@click.option(
+    "--schema", "-s", is_flag=True, help="Include full input schema in results"
+)
 @click.pass_context
-def search(ctx: click.Context, query: str, method: str, limit: int, refresh: bool, schema: bool) -> None:
+def search(
+    ctx: click.Context, query: str, method: str, limit: int, refresh: bool, schema: bool
+) -> None:
     """Search for tools matching a query."""
     output: OutputHandler = ctx.obj["output"]
     config = get_config(ctx)
@@ -126,7 +153,9 @@ def search(ctx: click.Context, query: str, method: str, limit: int, refresh: boo
         try:
             tools = asyncio.run(cache.refresh())
         except Exception as e:
-            output.error(e, help_text="Failed to refresh tool cache. Check server connections.")
+            output.error(
+                e, help_text="Failed to refresh tool cache. Check server connections."
+            )
             return
     else:
         tools = cache.get_tools()
@@ -156,11 +185,13 @@ def search(ctx: click.Context, query: str, method: str, limit: int, refresh: boo
                 item["inputSchema"] = r.tool.input_schema
             result_data.append(item)
 
-        output.success({
-            "query": query,
-            "method": method,
-            "results": result_data,
-        })
+        output.success(
+            {
+                "query": query,
+                "method": method,
+                "results": result_data,
+            }
+        )
     else:
         if not results:
             click.echo(f"No tools found matching '{query}'")
@@ -170,21 +201,27 @@ def search(ctx: click.Context, query: str, method: str, limit: int, refresh: boo
                 click.secho(f"[{r.tool.server}] ", fg="cyan", nl=False)
                 click.secho(r.tool.name, fg="green", bold=True)
                 if r.tool.description:
-                    click.echo(f"  {r.tool.description[:80]}{'...' if len(r.tool.description) > 80 else ''}")
+                    click.echo(
+                        f"  {r.tool.description[:80]}{'...' if len(r.tool.description) > 80 else ''}"
+                    )
                 # Show required params
                 required = r.tool.get_required_params()
                 if required:
-                    click.secho(f"  ⚡ Requires: ", fg="yellow", nl=False)
+                    click.secho("  ⚡ Requires: ", fg="yellow", nl=False)
                     click.echo(", ".join(required))
                 if schema:
                     click.secho("  Schema: ", fg="blue", nl=False)
-                    click.echo(json.dumps(r.tool.input_schema, indent=4).replace("\n", "\n    "))
+                    click.echo(
+                        json.dumps(r.tool.input_schema, indent=4).replace(
+                            "\n", "\n    "
+                        )
+                    )
                 click.echo()
 
             # Usage hint footer
             click.secho("─" * 50, dim=True)
             click.echo("To execute: ", nl=False)
-            click.secho("mcpl call <server> <tool> '{\"param\": \"value\"}'", fg="cyan")
+            click.secho('mcpl call <server> <tool> \'{"param": "value"}\'', fg="cyan")
             click.echo("Full schema: ", nl=False)
             click.secho("mcpl inspect <server> <tool>", fg="cyan")
 
@@ -239,9 +276,20 @@ def inspect(ctx: click.Context, server: str, tool: str, example: bool) -> None:
 @click.argument("tool")
 @click.argument("arguments", required=False)
 @click.option("--stdin", is_flag=True, help="Read arguments from stdin")
-@click.option("--no-daemon", is_flag=True, help="Bypass daemon and connect directly (slower but more reliable)")
+@click.option(
+    "--no-daemon",
+    is_flag=True,
+    help="Bypass daemon and connect directly (slower but more reliable)",
+)
 @click.pass_context
-def call(ctx: click.Context, server: str, tool: str, arguments: str | None, stdin: bool, no_daemon: bool) -> None:
+def call(
+    ctx: click.Context,
+    server: str,
+    tool: str,
+    arguments: str | None,
+    stdin: bool,
+    no_daemon: bool,
+) -> None:
     """Execute a tool on a server.
 
     ARGUMENTS should be a JSON object with the tool parameters.
@@ -269,7 +317,7 @@ def call(ctx: click.Context, server: str, tool: str, arguments: str | None, stdi
                 error_type="ArgumentParseError",
                 help_text=(
                     "Arguments must be valid JSON.\n\n"
-                    "Example: mcpl call github list_issues '{\"owner\": \"acme\", \"repo\": \"api\"}'"
+                    'Example: mcpl call github list_issues \'{"owner": "acme", "repo": "api"}\''
                 ),
             )
             return
@@ -279,9 +327,30 @@ def call(ctx: click.Context, server: str, tool: str, arguments: str | None, stdi
             # Direct connection without daemon
             logger.debug(f"Calling {server}/{tool} directly (no daemon)")
             manager = ConnectionManager(config)
-            result = asyncio.run(manager.call_tool(server, tool, args_dict))
+
+            # Pre-check: verify tool exists before calling
+            tool_exists, available_tools = _check_tool_exists(server, tool, manager)
+            if not tool_exists:
+                similar = find_similar_tools(tool, available_tools)
+                enriched_error = format_tool_suggestions(tool, server, similar)
+                output.success({"result": enriched_error})
+                return
+
+            # Call the tool
+            try:
+                result = asyncio.run(manager.call_tool(server, tool, args_dict))
+            except Exception as call_error:
+                # Handle MCP protocol errors
+                handled = _handle_mcp_exception(
+                    call_error, server, tool, available_tools
+                )
+                if handled:
+                    output.success(handled)
+                    return
+                raise  # Re-raise if not a known MCP error
 
             # Extract content from MCP result
+            result_data: Any
             if hasattr(result, "content"):
                 content = []
                 for item in result.content:
@@ -291,12 +360,17 @@ def call(ctx: click.Context, server: str, tool: str, arguments: str | None, stdi
                         content.append(item.data)
                     else:
                         content.append(str(item))
-                result_data: Any = content[0] if len(content) == 1 else content
+                result_data = content[0] if len(content) == 1 else content
             else:
                 result_data = result
 
-            # Check for MCP errors and enrich them (same as daemon does)
-            result_data = _enrich_mcp_errors(result_data, server, tool, manager, config)
+            # Check if tool returned an error (using MCP's isError field)
+            is_error = getattr(result, "isError", False)
+            if is_error:
+                output.success({"result": result_data, "error": True})
+                return
+
+            output.success({"result": result_data})
         else:
             # Call the tool via session daemon (maintains persistent connections)
             logger.debug(f"Calling {server}/{tool} via daemon")
@@ -305,7 +379,7 @@ def call(ctx: click.Context, server: str, tool: str, arguments: str | None, stdi
             # Result is already extracted by the daemon (and errors enriched)
             result_data = result.get("result", result)
 
-        output.success({"result": result_data})
+            output.success({"result": result_data})
     except Exception as e:
         # The error message from daemon/connection already includes context
         # Only add help text if not already present in the error message
@@ -314,7 +388,10 @@ def call(ctx: click.Context, server: str, tool: str, arguments: str | None, stdi
         help_text = None
 
         # Only add suggestions if the error message doesn't already contain them
-        if "no response from daemon" in error_lower or "failed to connect to daemon" in error_lower:
+        if (
+            "no response from daemon" in error_lower
+            or "failed to connect to daemon" in error_lower
+        ):
             if "--no-daemon" not in error_str:
                 help_text = "Try using --no-daemon flag to bypass the daemon."
 
@@ -367,7 +444,11 @@ def list_cmd(ctx: click.Context, server: str | None, refresh: bool) -> None:
                 click.echo(f" - {error}")
 
         try:
-            asyncio.run(cache.refresh(force=True, on_progress=on_progress, servers=enabled_servers))
+            asyncio.run(
+                cache.refresh(
+                    force=True, on_progress=on_progress, servers=enabled_servers
+                )
+            )
             # Show skipped disabled servers
             if disabled_servers and not ctx.obj["json_mode"]:
                 click.echo()
@@ -404,27 +485,31 @@ def list_cmd(ctx: click.Context, server: str | None, refresh: bool) -> None:
                 return
 
         if ctx.obj["json_mode"]:
-            output.success({
-                "server": server,
-                "tools": [
-                    {
-                        "name": t.name,
-                        "description": t.description,
-                        "requiredParams": t.get_required_params(),
-                    }
-                    for t in server_tools
-                ],
-            })
+            output.success(
+                {
+                    "server": server,
+                    "tools": [
+                        {
+                            "name": t.name,
+                            "description": t.description,
+                            "requiredParams": t.get_required_params(),
+                        }
+                        for t in server_tools
+                    ],
+                }
+            )
         else:
             click.secho(f"\nTools for [{server}]:\n", bold=True)
             for t in server_tools:
                 click.secho(f"  {t.name}", fg="green", bold=True)
                 if t.description:
-                    click.echo(f"    {t.description[:70]}{'...' if len(t.description) > 70 else ''}")
+                    click.echo(
+                        f"    {t.description[:70]}{'...' if len(t.description) > 70 else ''}"
+                    )
                 # Show required params to help AI agents know what's needed upfront
                 required = t.get_required_params()
                 if required:
-                    click.secho(f"    ⚡ Requires: ", fg="yellow", nl=False)
+                    click.secho("    ⚡ Requires: ", fg="yellow", nl=False)
                     click.echo(", ".join(required))
     else:
         # List all servers
@@ -443,12 +528,14 @@ def list_cmd(ctx: click.Context, server: str | None, refresh: bool) -> None:
                 status = "cached"
             else:
                 status = "not cached"
-            servers_data.append({
-                "name": name,
-                "status": status,
-                "tools": tool_count,
-                "disabled": is_disabled,
-            })
+            servers_data.append(
+                {
+                    "name": name,
+                    "status": status,
+                    "tools": tool_count,
+                    "disabled": is_disabled,
+                }
+            )
 
         if ctx.obj["json_mode"]:
             output.success({"servers": servers_data})
@@ -505,7 +592,7 @@ def session_status(ctx: click.Context) -> None:
                     connected = info.get("connected", False)
                     error = info.get("error")
                     status_color = "green" if connected else "red"
-                    status_text = "connected" if connected else f"disconnected"
+                    status_text = "connected" if connected else "disconnected"
                     click.secho(f"  [{name}] ", fg="cyan", nl=False)
                     click.secho(status_text, fg=status_color)
                     if error:
@@ -556,7 +643,9 @@ def session_stop(ctx: click.Context) -> None:
 
 
 @main.command()
-@click.option("--timeout", "-t", default=30, help="Connection timeout per server in seconds")
+@click.option(
+    "--timeout", "-t", default=30, help="Connection timeout per server in seconds"
+)
 @click.pass_context
 def verify(ctx: click.Context, timeout: int) -> None:
     """Verify all MCP servers are working.
@@ -634,21 +723,27 @@ def verify(ctx: click.Context, timeout: int) -> None:
         os.environ.pop("MCPL_CONNECTION_TIMEOUT", None)
 
     if ctx.obj["json_mode"]:
-        output.success({
-            "results": results,
-            "all_passed": all_passed,
-            "total": len(results),
-            "passed": sum(1 for r in results if r["status"] == "ok"),
-            "failed": sum(1 for r in results if r["status"] != "ok"),
-        })
+        output.success(
+            {
+                "results": results,
+                "all_passed": all_passed,
+                "total": len(results),
+                "passed": sum(1 for r in results if r["status"] == "ok"),
+                "failed": sum(1 for r in results if r["status"] != "ok"),
+            }
+        )
     else:
         click.echo()
         passed = sum(1 for r in results if r["status"] == "ok")
         failed = len(results) - passed
         if all_passed:
-            click.secho(f"All {len(results)} servers verified successfully.", fg="green")
+            click.secho(
+                f"All {len(results)} servers verified successfully.", fg="green"
+            )
         else:
-            click.secho(f"Verification complete: {passed} passed, {failed} failed.", fg="yellow")
+            click.secho(
+                f"Verification complete: {passed} passed, {failed} failed.", fg="yellow"
+            )
             click.echo("\nTo debug a failed server, try:")
             for r in results:
                 if r["status"] != "ok":
@@ -656,7 +751,11 @@ def verify(ctx: click.Context, timeout: int) -> None:
 
 
 @main.command("config")
-@click.option("--show-secrets", is_flag=True, help="Show actual values of environment variables (use with caution)")
+@click.option(
+    "--show-secrets",
+    is_flag=True,
+    help="Show actual values of environment variables (use with caution)",
+)
 @click.pass_context
 def show_config(ctx: click.Context, show_secrets: bool) -> None:
     """Show the current MCP configuration.
@@ -680,14 +779,18 @@ def show_config(ctx: click.Context, show_secrets: bool) -> None:
                 server_info["env"] = server.get_resolved_env()
             else:
                 # Mask env values
-                server_info["env"] = {k: "***" if v else "" for k, v in server.env.items()}
+                server_info["env"] = {
+                    k: "***" if v else "" for k, v in server.env.items()
+                }
             servers_data[name] = server_info
 
-        output.success({
-            "configPath": str(config.config_path) if config.config_path else None,
-            "envPath": str(config.env_path) if config.env_path else None,
-            "servers": servers_data,
-        })
+        output.success(
+            {
+                "configPath": str(config.config_path) if config.config_path else None,
+                "envPath": str(config.env_path) if config.env_path else None,
+                "servers": servers_data,
+            }
+        )
     else:
         click.secho("\nMCP Configuration\n", bold=True)
         click.echo(f"  Config file: {config.config_path or 'Not found'}")
@@ -749,7 +852,9 @@ def enable(ctx: click.Context, server: str) -> None:
             else:
                 click.echo(f"Server '{server}' was already enabled.")
     except ValueError as e:
-        output.error(e, help_text=f"Available servers: {', '.join(config.servers.keys())}")
+        output.error(
+            e, help_text=f"Available servers: {', '.join(config.servers.keys())}"
+        )
 
 
 @main.command()
@@ -775,4 +880,6 @@ def disable(ctx: click.Context, server: str) -> None:
             else:
                 click.echo(f"Server '{server}' was already disabled.")
     except ValueError as e:
-        output.error(e, help_text=f"Available servers: {', '.join(config.servers.keys())}")
+        output.error(
+            e, help_text=f"Available servers: {', '.join(config.servers.keys())}"
+        )

@@ -1,6 +1,5 @@
 """Tests for session daemon."""
 
-import asyncio
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -58,7 +57,7 @@ class TestDaemon:
         """Test daemon initialization."""
         with patch("mcp_launchpad.daemon.get_parent_pid", return_value=12345):
             daemon = Daemon(mock_config)
-            
+
             assert daemon.state.parent_pid == 12345
             assert daemon.state.config == mock_config
             assert daemon.state.running is True
@@ -68,26 +67,26 @@ class TestDaemon:
         """Test handling call_tool request."""
         with patch("mcp_launchpad.daemon.get_parent_pid", return_value=12345):
             daemon = Daemon(mock_config)
-            
+
             # Mock server state
             mock_session = MagicMock()
             mock_result = MagicMock()
             mock_result.content = [MagicMock(text="result text")]
             mock_session.call_tool = AsyncMock(return_value=mock_result)
-            
+
             daemon.state.servers["test-server"] = ServerState(
                 name="test-server",
                 session=mock_session,
                 connected=True,
             )
-            
+
             message = IPCMessage(
                 action="call_tool",
-                payload={"server": "test-server", "tool": "my_tool", "arguments": {}}
+                payload={"server": "test-server", "tool": "my_tool", "arguments": {}},
             )
-            
+
             response = await daemon._handle_request(message)
-            
+
             assert response.action == "result"
             assert response.payload["success"] is True
             assert response.payload["result"] == "result text"
@@ -97,25 +96,27 @@ class TestDaemon:
         """Test handling list_tools request."""
         with patch("mcp_launchpad.daemon.get_parent_pid", return_value=12345):
             daemon = Daemon(mock_config)
-            
+
             # Mock server state
             mock_session = MagicMock()
             mock_tool = MagicMock()
             mock_tool.name = "tool1"
             mock_tool.description = "A test tool"
             mock_tool.inputSchema = {}
-            mock_session.list_tools = AsyncMock(return_value=MagicMock(tools=[mock_tool]))
-            
+            mock_session.list_tools = AsyncMock(
+                return_value=MagicMock(tools=[mock_tool])
+            )
+
             daemon.state.servers["test-server"] = ServerState(
                 name="test-server",
                 session=mock_session,
                 connected=True,
             )
-            
+
             message = IPCMessage(action="list_tools", payload={"server": "test-server"})
-            
+
             response = await daemon._handle_request(message)
-            
+
             assert response.action == "result"
             assert response.payload["success"] is True
             assert len(response.payload["tools"]) == 1
@@ -126,16 +127,16 @@ class TestDaemon:
         """Test handling status request."""
         with patch("mcp_launchpad.daemon.get_parent_pid", return_value=12345):
             daemon = Daemon(mock_config)
-            
+
             daemon.state.servers["test-server"] = ServerState(
                 name="test-server",
                 connected=True,
             )
-            
+
             message = IPCMessage(action="status", payload={})
-            
+
             response = await daemon._handle_request(message)
-            
+
             assert response.action == "result"
             assert response.payload["success"] is True
             assert response.payload["parent_pid"] == 12345
@@ -147,13 +148,13 @@ class TestDaemon:
         """Test handling shutdown request."""
         with patch("mcp_launchpad.daemon.get_parent_pid", return_value=12345):
             daemon = Daemon(mock_config)
-            
+
             assert daemon.state.running is True
-            
+
             message = IPCMessage(action="shutdown", payload={})
-            
+
             response = await daemon._handle_request(message)
-            
+
             assert response.action == "result"
             assert response.payload["success"] is True
             assert daemon.state.running is False
@@ -180,7 +181,7 @@ class TestDaemon:
             # Call tool on non-existent server should raise
             message = IPCMessage(
                 action="call_tool",
-                payload={"server": "nonexistent", "tool": "test", "arguments": {}}
+                payload={"server": "nonexistent", "tool": "test", "arguments": {}},
             )
 
             response = await daemon._handle_request(message)
@@ -205,9 +206,7 @@ class TestDaemon:
 
             # Add server state with error
             daemon.state.servers["test-server"] = ServerState(
-                name="test-server",
-                connected=False,
-                error="Connection refused"
+                name="test-server", connected=False, error="Connection refused"
             )
 
             with pytest.raises(RuntimeError, match="Connection refused"):
@@ -370,14 +369,17 @@ class TestDaemonReconnectionBehavior:
                     async def mock_stdio_client(*args, **kwargs):
                         nonlocal call_count
                         call_count += 1
-                        raise asyncio.TimeoutError("Connection timed out")
+                        raise TimeoutError("Connection timed out")
 
                     # Create a mock context manager
                     mock_cm = MagicMock()
                     mock_cm.__aenter__ = AsyncMock(side_effect=mock_stdio_client)
                     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-                    with patch("mcp_launchpad.daemon.stdio_client", side_effect=asyncio.TimeoutError("Timeout")):
+                    with patch(
+                        "mcp_launchpad.daemon.stdio_client",
+                        side_effect=TimeoutError("Timeout"),
+                    ):
                         # Run _connect_server directly
                         await daemon._connect_server("test-server")
 
@@ -406,7 +408,10 @@ class TestDaemonReconnectionBehavior:
                     attempt_count += 1
                     raise FileNotFoundError("Command not found: echo")
 
-                with patch("mcp_launchpad.daemon.stdio_client", side_effect=FileNotFoundError("Command not found")):
+                with patch(
+                    "mcp_launchpad.daemon.stdio_client",
+                    side_effect=FileNotFoundError("Command not found"),
+                ):
                     await daemon._connect_server("test-server")
 
                 # Should only have been called once (no retries for FileNotFoundError)
@@ -468,4 +473,3 @@ class TestDaemonReconnectionBehavior:
                     await daemon._ensure_server_connected("test-server")
 
                 assert "timed out" in str(excinfo.value).lower()
-

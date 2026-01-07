@@ -8,9 +8,6 @@ from unittest.mock import patch
 import pytest
 
 from mcp_launchpad.config import (
-    CONFIG_SEARCH_DIRS,
-    EXCLUDED_CONFIG_FILES,
-    Config,
     ServerConfig,
     find_config_file,
     find_config_files,
@@ -450,6 +447,7 @@ class TestLoadConfig:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         config_data = {
@@ -519,6 +517,7 @@ class TestLoadConfig:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         config_data = {"mcpServers": {}}
@@ -534,6 +533,7 @@ class TestLoadConfig:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         config_data = {"otherKey": "value"}
@@ -622,7 +622,9 @@ class TestLoadConfig:
         assert "slack" in config.servers
         assert len(config.config_paths) >= 2
 
-    def test_first_definition_wins_for_duplicate_servers(self, tmp_path: Path, monkeypatch):
+    def test_first_definition_wins_for_duplicate_servers(
+        self, tmp_path: Path, monkeypatch
+    ):
         """Test that first definition wins when same server is in multiple files."""
         monkeypatch.chdir(tmp_path)
 
@@ -670,4 +672,3 @@ class TestLoadConfig:
 
         assert "custom" in config.servers
         assert config.servers["custom"].command == "custom-cmd"
-

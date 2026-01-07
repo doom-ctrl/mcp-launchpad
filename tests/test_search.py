@@ -278,4 +278,3 @@ class TestSearchMethodEnum:
         assert SearchMethod("bm25") == SearchMethod.BM25
         assert SearchMethod("regex") == SearchMethod.REGEX
         assert SearchMethod("exact") == SearchMethod.EXACT
-

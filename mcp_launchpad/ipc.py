@@ -7,9 +7,10 @@ import json
 import logging
 import struct
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Awaitable
+from typing import TYPE_CHECKING, Any
 
 from .platform import IS_WINDOWS, get_socket_path
 
@@ -40,7 +41,7 @@ class IPCMessage:
         return struct.pack(">I", len(data)) + data
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> "IPCMessage":
+    def from_bytes(cls, data: bytes) -> IPCMessage:
         """Deserialize message from JSON bytes."""
         parsed = json.loads(data.decode())
         return cls(action=parsed["action"], payload=parsed.get("payload", {}))
@@ -65,7 +66,9 @@ async def read_message(reader: asyncio.StreamReader) -> IPCMessage | None:
         # Read exactly 'length' bytes for the message body
         data = await reader.readexactly(length)
     except asyncio.IncompleteReadError as e:
-        logger.warning(f"Connection closed during message read: got {len(e.partial)} of {length} bytes")
+        logger.warning(
+            f"Connection closed during message read: got {len(e.partial)} of {length} bytes"
+        )
         return None
 
     return IPCMessage.from_bytes(data)
@@ -130,11 +133,15 @@ class UnixIPCServer(IPCServer):
                 except Exception as e:
                     logger.exception(f"Error in IPC handler: {e}")
                     # Send error response to client instead of silently closing
-                    error_response = IPCMessage(action="error", payload={"error": str(e)})
+                    error_response = IPCMessage(
+                        action="error", payload={"error": str(e)}
+                    )
                     try:
                         await write_message(writer, error_response)
                     except Exception as write_err:
-                        logger.debug(f"Failed to send error response (connection broken): {write_err}")
+                        logger.debug(
+                            f"Failed to send error response (connection broken): {write_err}"
+                        )
         except Exception as e:
             logger.exception(f"Error handling IPC client: {e}")
         finally:
@@ -253,7 +260,9 @@ class WindowsIPCServer(IPCServer):
                 logger.debug(f"Windows pipe client error: {e}")
 
 
-async def connect_to_daemon() -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+async def connect_to_daemon() -> (
+    tuple[asyncio.StreamReader, asyncio.StreamWriter] | None
+):
     """Connect to the daemon IPC endpoint.
 
     Returns (reader, writer) tuple or None if connection failed.
@@ -266,7 +275,9 @@ async def connect_to_daemon() -> tuple[asyncio.StreamReader, asyncio.StreamWrite
         return await _connect_unix(socket_path)
 
 
-async def _connect_unix(socket_path: Path) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+async def _connect_unix(
+    socket_path: Path,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
     """Connect to Unix socket."""
     if not socket_path.exists():
         return None
@@ -278,7 +289,9 @@ async def _connect_unix(socket_path: Path) -> tuple[asyncio.StreamReader, asynci
         return None
 
 
-async def _connect_windows(pipe_name: str) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+async def _connect_windows(
+    pipe_name: str,
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
     """Connect to Windows named pipe.
 
     Note: Windows support is experimental.
@@ -312,7 +325,9 @@ async def _connect_windows(pipe_name: str) -> tuple[asyncio.StreamReader, asynci
     return _create_pipe_streams(kernel32, handle)
 
 
-def _create_pipe_streams(kernel32: Any, handle: Any) -> tuple[asyncio.StreamReader, Any]:
+def _create_pipe_streams(
+    kernel32: Any, handle: Any
+) -> tuple[asyncio.StreamReader, Any]:
     """Create asyncio streams from a Windows pipe handle.
 
     Note: This is a simplified implementation for Windows named pipes.
@@ -329,6 +344,7 @@ def _create_pipe_streams(kernel32: Any, handle: Any) -> tuple[asyncio.StreamRead
 
         def write(self, data: bytes) -> None:
             import ctypes  # noqa: PLC0415
+
             bytes_written = ctypes.c_ulong(0)
             self.kernel32.WriteFile(
                 self.handle, data, len(data), ctypes.byref(bytes_written), None
@@ -354,4 +370,3 @@ def create_ipc_server(handler: IPCHandler) -> IPCServer:
         return WindowsIPCServer(str(socket_path), handler)
     else:
         return UnixIPCServer(socket_path, handler)
-

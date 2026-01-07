@@ -1,6 +1,5 @@
 """Tests for cache module."""
 
-import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -167,7 +166,10 @@ class TestToolCache:
         assert cache_with_temp_dir.is_cache_valid() is True
 
     def test_get_tools_valid_cache(
-        self, cache_with_temp_dir: ToolCache, sample_tools: list[ToolInfo], tmp_path: Path
+        self,
+        cache_with_temp_dir: ToolCache,
+        sample_tools: list[ToolInfo],
+        tmp_path: Path,
     ):
         """Test getting tools from valid cache."""
         # Create config for mtime
@@ -239,9 +241,7 @@ class TestToolCacheRefresh:
         """Test refresh fetches tools from all servers."""
         cache, mock_manager = cache_with_mock_manager
 
-        with patch(
-            "mcp_launchpad.cache.ConnectionManager", return_value=mock_manager
-        ):
+        with patch("mcp_launchpad.cache.ConnectionManager", return_value=mock_manager):
             tools = await cache.refresh(force=True)
 
         assert len(tools) > 0
@@ -253,9 +253,7 @@ class TestToolCacheRefresh:
         """Test refresh saves tools to cache."""
         cache, mock_manager = cache_with_mock_manager
 
-        with patch(
-            "mcp_launchpad.cache.ConnectionManager", return_value=mock_manager
-        ):
+        with patch("mcp_launchpad.cache.ConnectionManager", return_value=mock_manager):
             await cache.refresh(force=True)
 
         # Check cache files exist
@@ -263,7 +261,9 @@ class TestToolCacheRefresh:
         assert cache.metadata_path.exists()
 
     async def test_refresh_skips_when_valid(
-        self, cache_with_mock_manager: tuple[ToolCache, MagicMock], sample_tools: list[ToolInfo]
+        self,
+        cache_with_mock_manager: tuple[ToolCache, MagicMock],
+        sample_tools: list[ToolInfo],
     ):
         """Test refresh skips when cache is valid and force=False."""
         cache, mock_manager = cache_with_mock_manager
@@ -277,9 +277,7 @@ class TestToolCacheRefresh:
         )
         cache._save_metadata(metadata)
 
-        with patch(
-            "mcp_launchpad.cache.ConnectionManager", return_value=mock_manager
-        ):
+        with patch("mcp_launchpad.cache.ConnectionManager", return_value=mock_manager):
             tools = await cache.refresh(force=False)
 
         # Should use cache, not call servers
@@ -315,9 +313,7 @@ class TestToolCacheRefresh:
 
         mock_manager.list_tools = AsyncMock(side_effect=mock_list_tools)
 
-        with patch(
-            "mcp_launchpad.cache.ConnectionManager", return_value=mock_manager
-        ):
+        with patch("mcp_launchpad.cache.ConnectionManager", return_value=mock_manager):
             tools = await cache.refresh(force=True)
 
         # Should have tools from the good server
@@ -344,11 +340,8 @@ class TestToolCacheRefresh:
         mock_manager = MagicMock()
         mock_manager.list_tools = AsyncMock(side_effect=RuntimeError("Failed"))
 
-        with patch(
-            "mcp_launchpad.cache.ConnectionManager", return_value=mock_manager
-        ):
+        with patch("mcp_launchpad.cache.ConnectionManager", return_value=mock_manager):
             with pytest.raises(RuntimeError) as excinfo:
                 await cache.refresh(force=True)
 
             assert "Failed to connect to any servers" in str(excinfo.value)
-

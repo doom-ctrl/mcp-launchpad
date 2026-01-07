@@ -39,7 +39,8 @@ class ServerState:
                 data = json.load(f)
                 # Only keep disabled servers that still exist in config
                 self._disabled_servers = {
-                    s for s in data.get("disabled_servers", [])
+                    s
+                    for s in data.get("disabled_servers", [])
                     if s in self.config.servers
                 }
         except (json.JSONDecodeError, KeyError):

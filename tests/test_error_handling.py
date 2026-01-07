@@ -37,6 +37,7 @@ class TestConfigErrors:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         (tmp_path / "mcp.json").write_text("")
@@ -49,6 +50,7 @@ class TestConfigErrors:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         (tmp_path / "mcp.json").write_text('["array", "not", "object"]')
@@ -62,6 +64,7 @@ class TestConfigErrors:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         config_data = {
@@ -168,14 +171,16 @@ class TestConnectionErrors:
         why the server didn't respond. This is critical for YouTube users who
         may have servers that hang during startup.
         """
-        from mcp_launchpad.connection import CONNECTION_TIMEOUT
 
         config = Config(
             servers={
                 "slow-server": ServerConfig(
                     name="slow-server",
                     command="python",
-                    args=["-c", "import time; print('Starting...', flush=True); time.sleep(100)"],
+                    args=[
+                        "-c",
+                        "import time; print('Starting...', flush=True); time.sleep(100)",
+                    ],
                     env={},
                 )
             },
@@ -208,7 +213,10 @@ class TestConnectionErrors:
                 "error-server": ServerConfig(
                     name="error-server",
                     command="python",
-                    args=["-c", "import sys; sys.stderr.write('Debug: initialization failed\\n'); sys.exit(1)"],
+                    args=[
+                        "-c",
+                        "import sys; sys.stderr.write('Debug: initialization failed\\n'); sys.exit(1)",
+                    ],
                     env={},
                 )
             },
@@ -234,7 +242,9 @@ class TestCLIErrorDisplay:
     def runner(self) -> CliRunner:
         return CliRunner()
 
-    def test_human_mode_error_display(self, runner: CliRunner, tmp_path: Path, monkeypatch):
+    def test_human_mode_error_display(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
         """Test error is displayed in human-readable format."""
         monkeypatch.chdir(tmp_path)
         # Use explicit non-existent config to force error
@@ -247,7 +257,9 @@ class TestCLIErrorDisplay:
         # Should have Error: prefix in human mode
         assert "Error" in result.output
 
-    def test_json_mode_error_display(self, runner: CliRunner, tmp_path: Path, monkeypatch):
+    def test_json_mode_error_display(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
         """Test error is displayed in JSON format for application errors."""
         monkeypatch.chdir(tmp_path)
         # Create a valid config but with a server that will fail
@@ -256,7 +268,9 @@ class TestCLIErrorDisplay:
 
         with patch("mcp_launchpad.cli.ToolCache") as MockCache:
             mock_cache = MagicMock()
-            mock_cache.refresh = AsyncMock(side_effect=RuntimeError("Connection failed"))
+            mock_cache.refresh = AsyncMock(
+                side_effect=RuntimeError("Connection failed")
+            )
             MockCache.return_value = mock_cache
 
             # Use --refresh to trigger the refresh path which will error
@@ -279,7 +293,9 @@ class TestCLIErrorDisplay:
 
         with patch("mcp_launchpad.cli.ToolCache") as MockCache:
             mock_cache = MagicMock()
-            mock_cache.refresh = AsyncMock(side_effect=RuntimeError("Connection failed"))
+            mock_cache.refresh = AsyncMock(
+                side_effect=RuntimeError("Connection failed")
+            )
             MockCache.return_value = mock_cache
 
             # Use --refresh to trigger the refresh path which will error
@@ -289,7 +305,9 @@ class TestCLIErrorDisplay:
             parsed = json.loads(result.output)
             assert "traceback" in parsed["error"]
 
-    def test_json_error_includes_type(self, runner: CliRunner, tmp_path: Path, monkeypatch):
+    def test_json_error_includes_type(
+        self, runner: CliRunner, tmp_path: Path, monkeypatch
+    ):
         """Test JSON error includes error type."""
         monkeypatch.chdir(tmp_path)
         # Create a valid config but with a server that will fail
@@ -298,7 +316,9 @@ class TestCLIErrorDisplay:
 
         with patch("mcp_launchpad.cli.ToolCache") as MockCache:
             mock_cache = MagicMock()
-            mock_cache.refresh = AsyncMock(side_effect=RuntimeError("Connection failed"))
+            mock_cache.refresh = AsyncMock(
+                side_effect=RuntimeError("Connection failed")
+            )
             MockCache.return_value = mock_cache
 
             # Use --refresh to trigger the refresh path which will error
@@ -332,7 +352,9 @@ class TestCacheErrors:
         cache.metadata_path = tmp_path / "metadata.json"
 
         mock_manager = MagicMock()
-        mock_manager.list_tools = AsyncMock(side_effect=RuntimeError("Connection failed"))
+        mock_manager.list_tools = AsyncMock(
+            side_effect=RuntimeError("Connection failed")
+        )
 
         with patch("mcp_launchpad.cache.ConnectionManager", return_value=mock_manager):
             with pytest.raises(RuntimeError) as excinfo:
@@ -352,8 +374,12 @@ class TestCacheErrors:
         config = Config(
             servers={
                 "working-server": ServerConfig(name="working-server", command="python"),
-                "broken-server": ServerConfig(name="broken-server", command="nonexistent"),
-                "another-working": ServerConfig(name="another-working", command="python"),
+                "broken-server": ServerConfig(
+                    name="broken-server", command="nonexistent"
+                ),
+                "another-working": ServerConfig(
+                    name="another-working", command="python"
+                ),
             },
             config_path=tmp_path / "config.json",
             env_path=None,
@@ -367,8 +393,18 @@ class TestCacheErrors:
 
         # Create mock tools for successful servers
         successful_tools = [
-            ToolInfo(server="working-server", name="tool1", description="Tool 1", input_schema={}),
-            ToolInfo(server="another-working", name="tool2", description="Tool 2", input_schema={}),
+            ToolInfo(
+                server="working-server",
+                name="tool1",
+                description="Tool 1",
+                input_schema={},
+            ),
+            ToolInfo(
+                server="another-working",
+                name="tool2",
+                description="Tool 2",
+                input_schema={},
+            ),
         ]
 
         async def mock_list_tools(server_name: str):
@@ -628,6 +664,7 @@ class TestEdgeCases:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         config_data = {
@@ -642,4 +679,3 @@ class TestEdgeCases:
 
         config = load_config()
         assert "test-üñíçödé" in config.servers
-

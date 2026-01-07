@@ -12,9 +12,9 @@ if TYPE_CHECKING:
 
 def find_similar_tools(
     tool_name: str,
-    available_tools: list["ToolInfo"],
+    available_tools: list[ToolInfo],
     max_suggestions: int = 5,
-) -> list["ToolInfo"]:
+) -> list[ToolInfo]:
     """Find tools with similar names to the requested tool.
 
     Uses a combination of:
@@ -37,7 +37,7 @@ def find_similar_tools(
     search_lower = tool_name.lower()
     search_words = set(re.split(r"[_\-\s]+", search_lower))
 
-    scored_tools: list[tuple[float, "ToolInfo"]] = []
+    scored_tools: list[tuple[float, ToolInfo]] = []
 
     for tool in available_tools:
         name_lower = tool.name.lower()
@@ -56,7 +56,9 @@ def find_similar_tools(
             # Word overlap (medium weight)
             common_words = search_words & name_words
             if common_words:
-                word_overlap = len(common_words) / max(len(search_words), len(name_words))
+                word_overlap = len(common_words) / max(
+                    len(search_words), len(name_words)
+                )
                 score += 0.3 * word_overlap
 
             # Sequence similarity (lower weight, catches typos)
@@ -75,7 +77,8 @@ def find_similar_tools(
 def format_tool_suggestions(
     tool_name: str,
     server_name: str,
-    similar_tools: list["ToolInfo"],
+    similar_tools: list[ToolInfo],
+    original_error: str | None = None,
 ) -> str:
     """Format a helpful error message with tool suggestions.
 
@@ -83,11 +86,17 @@ def format_tool_suggestions(
         tool_name: The tool name that wasn't found
         server_name: The server that was queried
         similar_tools: List of similar tools to suggest
+        original_error: The original error message from the MCP server
 
     Returns:
         Formatted error message with suggestions
     """
     lines = [f"Tool '{tool_name}' not found on server '{server_name}'."]
+
+    # Include original error for debugging if it differs from generic message
+    if original_error and "not found" not in original_error.lower()[:50]:
+        lines.append("")
+        lines.append(f"Original error: {original_error[:500]}")
 
     if similar_tools:
         lines.append("")
@@ -118,10 +127,13 @@ def is_tool_not_found_error(error_message: str) -> bool:
         True if this is a "tool not found" error
     """
     lower_msg = error_message.lower()
+    # Be strict about matching to avoid false positives
+    # Only match clear "tool not found" patterns, not generic "not found" errors
     return (
-        "tool not found" in lower_msg
-        or "not found" in lower_msg and "tool" in lower_msg
-        or "-32602" in error_message and "not found" in lower_msg
+        "tool not found" in lower_msg  # Direct match
+        or "tool" in lower_msg[:50]
+        and "not found" in lower_msg[:100]  # Both terms near start
+        or "-32601" in error_message  # JSON-RPC "Method not found" error code
     )
 
 
@@ -139,7 +151,8 @@ def is_validation_error(error_message: str) -> bool:
         "validation error" in lower_msg
         or "invalid arguments" in lower_msg
         or "invalid_type" in lower_msg
-        or "required" in lower_msg and ("expected" in lower_msg or "received" in lower_msg)
+        or "required" in lower_msg
+        and ("expected" in lower_msg or "received" in lower_msg)
     )
 
 
@@ -147,7 +160,7 @@ def format_validation_error(
     tool_name: str,
     server_name: str,
     error_message: str,
-    tool_info: "ToolInfo | None" = None,
+    tool_info: ToolInfo | None = None,
 ) -> str:
     """Format a helpful error message for validation errors.
 
@@ -183,7 +196,9 @@ def format_validation_error(
         # Include the original error for context
         lines.append("Details:")
         # Clean up the error message a bit
-        cleaned = error_message.replace("MCP error -32602: ", "").replace("Input validation error: ", "")
+        cleaned = error_message.replace("MCP error -32602: ", "").replace(
+            "Input validation error: ", ""
+        )
         lines.append(f"  {cleaned[:200]}")
         lines.append("")
         lines.append(f"Try: mcpl inspect {server_name} {tool_name} --example")

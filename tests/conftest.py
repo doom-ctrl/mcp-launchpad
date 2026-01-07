@@ -2,17 +2,14 @@
 
 import json
 import os
-import tempfile
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from mcp_launchpad.config import Config, ServerConfig
 from mcp_launchpad.connection import ToolInfo
-
 
 # ============================================================================
 # Sample Data Fixtures
@@ -245,7 +242,7 @@ def mock_failing_session() -> MagicMock:
 
 
 @pytest.fixture
-def clean_env() -> Generator[None, None, None]:
+def clean_env() -> Generator[None]:
     """Temporarily clear test-related environment variables."""
     old_env = os.environ.copy()
     # Remove test-related vars
@@ -259,7 +256,7 @@ def clean_env() -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def env_with_tokens() -> Generator[None, None, None]:
+def env_with_tokens() -> Generator[None]:
     """Set up environment with test tokens."""
     old_env = os.environ.copy()
     os.environ["TEST_TOKEN"] = "test-token-value"
@@ -268,4 +265,3 @@ def env_with_tokens() -> Generator[None, None, None]:
     yield
     os.environ.clear()
     os.environ.update(old_env)
-

@@ -1,8 +1,6 @@
 """Tests for output module."""
 
 import json
-import sys
-from unittest.mock import patch
 
 import pytest
 
@@ -163,4 +161,3 @@ class TestOutputHandler:
         assert "Status" in captured.out
         assert "server1" in captured.out
         assert "server2" in captured.out
-

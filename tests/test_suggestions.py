@@ -21,7 +21,9 @@ class TestIsTooNotFoundError:
         assert is_tool_not_found_error("Tool xyz not found")
 
     def test_mcp_error_code(self):
-        assert is_tool_not_found_error("MCP error -32602: Tool list-all-teams not found")
+        assert is_tool_not_found_error(
+            "MCP error -32602: Tool list-all-teams not found"
+        )
 
     def test_not_a_tool_error(self):
         assert not is_tool_not_found_error("Connection failed")
@@ -134,7 +136,10 @@ class TestFormatToolSuggestions:
                 server="vercel",
                 name="list_projects",
                 description="List all projects",
-                input_schema={"required": ["teamId"], "properties": {"teamId": {"type": "string"}}},
+                input_schema={
+                    "required": ["teamId"],
+                    "properties": {"teamId": {"type": "string"}},
+                },
             ),
             ToolInfo(
                 server="vercel",
@@ -160,6 +165,24 @@ class TestFormatToolSuggestions:
         result = format_tool_suggestions("project", "vercel", sample_tools)
         # Tools with required params should show them
         assert "teamId" in result
+
+    def test_format_preserves_original_error(self, sample_tools):
+        """Original error should be included when it differs from generic 'not found' message."""
+        original = "Rate limit exceeded. Only 5000 requests allowed per hour."
+        result = format_tool_suggestions(
+            "list_project", "vercel", sample_tools, original
+        )
+        assert "Original error:" in result
+        assert "Rate limit exceeded" in result
+
+    def test_format_skips_redundant_original_error(self, sample_tools):
+        """Don't show original error if it's already a 'not found' type message."""
+        original = "Tool xyz not found"
+        result = format_tool_suggestions(
+            "list_project", "vercel", sample_tools, original
+        )
+        # Should NOT duplicate "not found" messages
+        assert "Original error:" not in result
 
 
 class TestFormatValidationError:

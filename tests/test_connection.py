@@ -1,10 +1,8 @@
 """Tests for connection module."""
 
-import asyncio
 import json
 import os
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -39,7 +37,11 @@ class TestToolInfo:
         assert d["server"] == "github"
         assert d["name"] == "create_issue"
         assert d["description"] == "Create a new issue"
-        assert d["inputSchema"] == {"type": "object", "properties": {}, "required": ["title"]}
+        assert d["inputSchema"] == {
+            "type": "object",
+            "properties": {},
+            "required": ["title"],
+        }
 
     def test_from_dict(self):
         """Test creating ToolInfo from dictionary."""
@@ -168,7 +170,9 @@ class TestConnectionManager:
         assert "Server 'nonexistent' not found" in str(excinfo.value)
         assert "Available servers: test-server" in str(excinfo.value)
 
-    def test_get_server_config_lists_multiple_available(self, multi_server_config: Config):
+    def test_get_server_config_lists_multiple_available(
+        self, multi_server_config: Config
+    ):
         """Test error message lists all available servers."""
         manager = ConnectionManager(multi_server_config)
         with pytest.raises(ValueError) as excinfo:
@@ -200,7 +204,9 @@ class TestConnectionManagerConnect:
         )
         return ConnectionManager(config)
 
-    async def test_connect_missing_env_var(self, manager_with_missing_env: ConnectionManager):
+    async def test_connect_missing_env_var(
+        self, manager_with_missing_env: ConnectionManager
+    ):
         """Test connecting when required env var is missing."""
         # Clear the env var to ensure it's missing
         with patch.dict(os.environ, {}, clear=True):
@@ -289,4 +295,3 @@ class TestConnectionManagerCallTool:
             await manager.call_tool("nonexistent", "some_tool", {})
 
         assert "Server 'nonexistent' not found" in str(excinfo.value)
-

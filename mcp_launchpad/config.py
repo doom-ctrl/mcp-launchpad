@@ -23,7 +23,7 @@ def _resolve_env_vars(value: str) -> str:
         return value
 
     result = value
-    for match in re.finditer(r'\$\{([^}]+)\}', value):
+    for match in re.finditer(r"\$\{([^}]+)\}", value):
         env_var = match.group(1)
         env_value = os.environ.get(env_var, "")
         result = result.replace(match.group(0), env_value)
@@ -60,9 +60,9 @@ class Config:
 
 # Directories to search for config files, in priority order
 CONFIG_SEARCH_DIRS = [
-    Path("."),                      # Current directory
-    Path(".claude"),                # Project-level .claude directory
-    Path.home() / ".claude",        # User-level .claude directory
+    Path("."),  # Current directory
+    Path(".claude"),  # Project-level .claude directory
+    Path.home() / ".claude",  # User-level .claude directory
 ]
 
 # File to exclude (Claude Code's convention - avoids collision)
@@ -208,4 +208,3 @@ def load_config(
         config_paths=config_files,
         env_path=env_file,
     )
-

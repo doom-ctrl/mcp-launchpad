@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import signal
-import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -198,7 +197,7 @@ class Daemon:
                         # Clean exit - don't retry
                         return
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 server_state.error = (
                     f"Connection timed out after {CONNECTION_TIMEOUT}s. "
                     f"The server may be slow to initialize or unresponsive."
@@ -212,7 +211,9 @@ class Daemon:
                     "  - For npx servers: npm install -g <package-name>\n"
                     "  - Check your PATH environment variable"
                 )
-                logger.error(f"Server {server_name}: Command not found: {server_config.command}")
+                logger.error(
+                    f"Server {server_name}: Command not found: {server_config.command}"
+                )
                 # Don't retry if command not found
                 return
             except asyncio.CancelledError:
@@ -280,7 +281,8 @@ class Daemon:
             elif action == "shutdown":
                 self.state.running = False
                 return IPCMessage(
-                    action="result", payload={"success": True, "message": "Shutting down"}
+                    action="result",
+                    payload={"success": True, "message": "Shutting down"},
                 )
 
             else:
@@ -306,7 +308,10 @@ class Daemon:
 
         # If not connected and no connection task running, start one
         if not server_state or (not server_state.connected and not server_state.error):
-            if server_name not in self._connection_tasks or self._connection_tasks[server_name].done():
+            if (
+                server_name not in self._connection_tasks
+                or self._connection_tasks[server_name].done()
+            ):
                 self._connection_tasks[server_name] = asyncio.create_task(
                     self._connect_server(server_name)
                 )
@@ -318,16 +323,20 @@ class Daemon:
             if server_state and server_state.connected and server_state.session:
                 return server_state
             if server_state and server_state.error:
-                error_msg = f"Server '{server_name}' connection failed: {server_state.error}"
+                error_msg = (
+                    f"Server '{server_name}' connection failed: {server_state.error}"
+                )
                 # Include stderr output if available
                 if server_state.stderr_file:
                     try:
                         stderr_path = Path(server_state.stderr_file.name)
                         if stderr_path.exists():
-                            with open(stderr_path, "r") as f:
+                            with open(stderr_path) as f:
                                 stderr_content = f.read().strip()
                                 if stderr_content:
-                                    error_msg += f"\n\nServer stderr output:\n{stderr_content}"
+                                    error_msg += (
+                                        f"\n\nServer stderr output:\n{stderr_content}"
+                                    )
                     except Exception:
                         pass  # If we can't read stderr, just use the basic error
                 raise RuntimeError(error_msg)
@@ -356,8 +365,6 @@ class Daemon:
             find_similar_tools,
             format_tool_suggestions,
             format_validation_error,
-            is_tool_not_found_error,
-            is_validation_error,
         )
 
         server_state = await self._ensure_server_connected(server_name)
@@ -365,9 +372,71 @@ class Daemon:
         if server_state.session is None:
             raise RuntimeError(f"Server '{server_name}' session is not available")
 
-        result = await server_state.session.call_tool(tool_name, arguments)
+        # Pre-check: verify tool exists before calling (provides better error messages)
+        available_tools: list[ToolInfo] = []
+        tool_exists = False
+        try:
+            tools_result = await server_state.session.list_tools()
+            available_tools = [
+                ToolInfo(
+                    server=server_name,
+                    name=t.name,
+                    description=t.description or "",
+                    input_schema=t.inputSchema if hasattr(t, "inputSchema") else {},
+                )
+                for t in tools_result.tools
+            ]
+            tool_exists = any(t.name == tool_name for t in available_tools)
+        except Exception:
+            # If we can't list tools, proceed anyway - the call will fail with its own error
+            tool_exists = True  # Assume it exists, let the call fail naturally
+
+        if not tool_exists:
+            # Tool doesn't exist - provide helpful suggestions
+            similar = find_similar_tools(tool_name, available_tools)
+            enriched_error = format_tool_suggestions(tool_name, server_name, similar)
+            return {
+                "result": enriched_error,
+                "error": True,
+                "error_type": "tool_not_found",
+            }
+
+        # Call the tool
+        try:
+            result = await server_state.session.call_tool(tool_name, arguments)
+        except Exception as e:
+            # Handle MCP protocol errors (JSON-RPC errors)
+            error_str = str(e)
+
+            # Check for JSON-RPC error codes
+            if "-32601" in error_str:  # Method not found
+                similar = find_similar_tools(tool_name, available_tools)
+                enriched_error = format_tool_suggestions(
+                    tool_name, server_name, similar, error_str
+                )
+                return {
+                    "result": enriched_error,
+                    "error": True,
+                    "error_type": "tool_not_found",
+                }
+            elif "-32602" in error_str:  # Invalid params
+                tool_info = next(
+                    (t for t in available_tools if t.name == tool_name), None
+                )
+                enriched_error = format_validation_error(
+                    tool_name, server_name, error_str, tool_info
+                )
+                return {
+                    "result": enriched_error,
+                    "error": True,
+                    "error_type": "validation_error",
+                }
+            else:
+                # Other protocol error - return as-is
+                return {"result": error_str, "error": True, "error_type": "mcp_error"}
 
         # Extract content from MCP result
+        result_data: Any
         if hasattr(result, "content"):
             content = []
             for item in result.content:
@@ -381,49 +450,12 @@ class Daemon:
         else:
             result_data = result
 
-        # Check for MCP errors in the result and enrich them with helpful suggestions
-        if isinstance(result_data, str):
-            if is_tool_not_found_error(result_data):
-                # Get available tools and suggest similar ones
-                try:
-                    tools_result = await server_state.session.list_tools()
-                    available_tools = [
-                        ToolInfo(
-                            server=server_name,
-                            name=t.name,
-                            description=t.description or "",
-                            input_schema=t.inputSchema if hasattr(t, "inputSchema") else {},
-                        )
-                        for t in tools_result.tools
-                    ]
-                    similar = find_similar_tools(tool_name, available_tools)
-                    enriched_error = format_tool_suggestions(tool_name, server_name, similar)
-                    return {"result": enriched_error, "error": True, "error_type": "tool_not_found"}
-                except Exception:
-                    # If we can't get suggestions, return original error
-                    pass
-
-            elif is_validation_error(result_data):
-                # Try to get tool info for better error message
-                try:
-                    tools_result = await server_state.session.list_tools()
-                    tool_info = None
-                    for t in tools_result.tools:
-                        if t.name == tool_name:
-                            tool_info = ToolInfo(
-                                server=server_name,
-                                name=t.name,
-                                description=t.description or "",
-                                input_schema=t.inputSchema if hasattr(t, "inputSchema") else {},
-                            )
-                            break
-                    enriched_error = format_validation_error(
-                        tool_name, server_name, result_data, tool_info
-                    )
-                    return {"result": enriched_error, "error": True, "error_type": "validation_error"}
-                except Exception:
-                    # If we can't enrich, return original error
-                    pass
+        # Check if tool returned an error (using MCP's isError field)
+        is_error = getattr(result, "isError", False)
+        if is_error:
+            # Tool explicitly marked result as error - return with error flag
+            # but don't try to guess the error type from text
+            return {"result": result_data, "error": True, "error_type": "tool_error"}
 
         return {"result": result_data}
 
@@ -492,7 +524,9 @@ class Daemon:
         socket_path = get_socket_path()
 
         if anchor:
-            logger.info(f"IDE environment detected - monitoring session anchor: {anchor}")
+            logger.info(
+                f"IDE environment detected - monitoring session anchor: {anchor}"
+            )
         else:
             logger.info("IDE environment detected - monitoring idle timeout only")
 
@@ -512,7 +546,9 @@ class Daemon:
             if IDLE_TIMEOUT > 0:
                 idle_time = time.time() - self.state.last_activity
                 if idle_time > IDLE_TIMEOUT:
-                    logger.info(f"Idle timeout reached ({idle_time:.0f}s > {IDLE_TIMEOUT}s), shutting down")
+                    logger.info(
+                        f"Idle timeout reached ({idle_time:.0f}s > {IDLE_TIMEOUT}s), shutting down"
+                    )
                     self.state.running = False
                     break
 
@@ -551,7 +587,7 @@ class Daemon:
         if self._connection_tasks:
             await asyncio.gather(
                 *self._connection_tasks.values(),
-                return_exceptions=True  # Don't raise on CancelledError
+                return_exceptions=True,  # Don't raise on CancelledError
             )
             self._connection_tasks.clear()
 
@@ -632,4 +668,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

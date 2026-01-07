@@ -1,10 +1,9 @@
 """Tests for IPC communication layer."""
 
 import asyncio
-import json
 import struct
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -26,7 +25,7 @@ class TestIPCMessage:
         """Test message serialization to bytes."""
         message = IPCMessage(action="test_action", payload={"key": "value"})
         data = message.to_bytes()
-        
+
         # Should have 4-byte length prefix
         assert len(data) > HEADER_SIZE
         length = struct.unpack(">I", data[:HEADER_SIZE])[0]
@@ -34,9 +33,11 @@ class TestIPCMessage:
 
     def test_from_bytes_deserialization(self):
         """Test message deserialization from bytes."""
-        original = IPCMessage(action="call_tool", payload={"server": "test", "tool": "foo"})
+        original = IPCMessage(
+            action="call_tool", payload={"server": "test", "tool": "foo"}
+        )
         data = original.to_bytes()
-        
+
         # Skip the length prefix when deserializing
         restored = IPCMessage.from_bytes(data[HEADER_SIZE:])
         assert restored.action == original.action
@@ -46,7 +47,7 @@ class TestIPCMessage:
         """Test that serialization and deserialization are reversible."""
         original = IPCMessage(
             action="complex_action",
-            payload={"nested": {"data": [1, 2, 3]}, "unicode": "日本語"}
+            payload={"nested": {"data": [1, 2, 3]}, "unicode": "日本語"},
         )
         data = original.to_bytes()
         restored = IPCMessage.from_bytes(data[HEADER_SIZE:])
@@ -69,21 +70,21 @@ class TestReadWriteMessage:
         """Test writing and reading a message through streams."""
         # Create in-memory stream
         reader = asyncio.StreamReader()
-        
+
         # Create a mock writer
         written_data = bytearray()
         mock_writer = MagicMock()
         mock_writer.write = lambda data: written_data.extend(data)
         mock_writer.drain = AsyncMock()
-        
+
         # Write a message
         original = IPCMessage(action="test", payload={"foo": "bar"})
         await write_message(mock_writer, original)
-        
+
         # Feed the written data to the reader
         reader.feed_data(bytes(written_data))
         reader.feed_eof()
-        
+
         # Read it back
         restored = await read_message(reader)
         assert restored is not None
@@ -96,7 +97,7 @@ class TestReadWriteMessage:
         reader = asyncio.StreamReader()
         reader.feed_data(b"\x00\x00")  # Only 2 bytes, need 4
         reader.feed_eof()
-        
+
         result = await read_message(reader)
         assert result is None
 
@@ -107,7 +108,7 @@ class TestReadWriteMessage:
         # Header says 100 bytes, but we only provide 10
         reader.feed_data(struct.pack(">I", 100) + b"short")
         reader.feed_eof()
-        
+
         result = await read_message(reader)
         assert result is None
 
@@ -120,6 +121,7 @@ class TestUnixIPCServer:
     async def test_server_start_stop(self):
         """Test server can start and stop cleanly."""
         import tempfile
+
         # Use a short path to avoid AF_UNIX path length limit
         socket_path = Path(tempfile.gettempdir()) / "mcpl-test.sock"
 
@@ -138,6 +140,7 @@ class TestUnixIPCServer:
     async def test_server_handles_request(self):
         """Test server handles client requests correctly."""
         import tempfile
+
         # Use a short path to avoid AF_UNIX path length limit
         socket_path = Path(tempfile.gettempdir()) / "mcpl-test2.sock"
 
@@ -178,6 +181,7 @@ class TestCreateIPCServer:
 
         if IS_WINDOWS:
             from mcp_launchpad.ipc import WindowsIPCServer
+
             assert isinstance(server, WindowsIPCServer)
         else:
             assert isinstance(server, UnixIPCServer)
@@ -243,4 +247,3 @@ class TestIPCMessageEdgeCases:
         data = message.to_bytes()
         restored = IPCMessage.from_bytes(data[HEADER_SIZE:])
         assert restored.payload == nested
-

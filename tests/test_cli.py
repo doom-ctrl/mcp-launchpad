@@ -23,8 +23,12 @@ def mock_config(sample_tools: list[ToolInfo]) -> MagicMock:
     """Create a mock config with sample tools."""
     config = Config(
         servers={
-            "github": ServerConfig(name="github", command="uvx", args=["mcp-server-github"]),
-            "sentry": ServerConfig(name="sentry", command="npx", args=["mcp-server-sentry"]),
+            "github": ServerConfig(
+                name="github", command="uvx", args=["mcp-server-github"]
+            ),
+            "sentry": ServerConfig(
+                name="sentry", command="npx", args=["mcp-server-sentry"]
+            ),
         },
         config_path=Path("test.json"),
         env_path=None,
@@ -66,7 +70,11 @@ class TestSearchCommand:
         assert "does not exist" in result.output or "Error" in result.output
 
     def test_search_with_results(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test search with results."""
         monkeypatch.chdir(tmp_path)
@@ -87,7 +95,11 @@ class TestSearchCommand:
             assert "github" in result.output.lower()
 
     def test_search_json_mode(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test search with JSON output."""
         monkeypatch.chdir(tmp_path)
@@ -109,7 +121,11 @@ class TestSearchCommand:
             assert "results" in parsed["data"]
 
     def test_search_no_results(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test search with no matching results."""
         monkeypatch.chdir(tmp_path)
@@ -128,7 +144,11 @@ class TestSearchCommand:
             assert "No tools found" in result.output or result.exit_code == 0
 
     def test_search_invalid_regex(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test search with invalid regex pattern."""
         monkeypatch.chdir(tmp_path)
@@ -152,12 +172,17 @@ class TestListCommand:
     """Tests for the list command."""
 
     def test_list_servers(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test listing all servers."""
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         config_data = {
@@ -180,7 +205,11 @@ class TestListCommand:
             assert "sentry" in result.output
 
     def test_list_server_tools(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test listing tools for a specific server."""
         monkeypatch.chdir(tmp_path)
@@ -200,7 +229,11 @@ class TestListCommand:
             assert "list_issues" in result.output
 
     def test_list_json_mode(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test list with JSON output."""
         monkeypatch.chdir(tmp_path)
@@ -225,7 +258,11 @@ class TestInspectCommand:
     """Tests for the inspect command."""
 
     def test_inspect_from_cache(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test inspecting a tool from cache."""
         monkeypatch.chdir(tmp_path)
@@ -238,7 +275,9 @@ class TestInspectCommand:
             mock_cache.get_tools.return_value = sample_tools
             MockCache.return_value = mock_cache
 
-            result = runner.invoke(main, ["--json", "inspect", "github", "create_issue"])
+            result = runner.invoke(
+                main, ["--json", "inspect", "github", "create_issue"]
+            )
 
             assert result.exit_code == 0
             parsed = json.loads(result.output)
@@ -246,7 +285,11 @@ class TestInspectCommand:
             assert parsed["data"]["name"] == "create_issue"
 
     def test_inspect_with_example(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test inspecting a tool with --example flag."""
         monkeypatch.chdir(tmp_path)
@@ -268,7 +311,11 @@ class TestInspectCommand:
             assert "exampleCall" in parsed["data"]
 
     def test_inspect_tool_not_found(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test inspecting a non-existent tool."""
         monkeypatch.chdir(tmp_path)
@@ -276,9 +323,10 @@ class TestInspectCommand:
         config_data = {"mcpServers": {"github": {"command": "test"}}}
         (tmp_path / "mcp.json").write_text(json.dumps(config_data))
 
-        with patch("mcp_launchpad.cli.ToolCache") as MockCache, patch(
-            "mcp_launchpad.cli.ConnectionManager"
-        ) as MockManager:
+        with (
+            patch("mcp_launchpad.cli.ToolCache") as MockCache,
+            patch("mcp_launchpad.cli.ConnectionManager") as MockManager,
+        ):
             mock_cache = MagicMock()
             mock_cache.get_tools.return_value = sample_tools
             MockCache.return_value = mock_cache
@@ -300,9 +348,7 @@ class TestCallCommand:
     for persistent connections. We mock SessionClient for fast, isolated tests.
     """
 
-    def test_call_with_arguments(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
+    def test_call_with_arguments(self, runner: CliRunner, tmp_path: Path, monkeypatch):
         """Test calling a tool with arguments."""
         monkeypatch.chdir(tmp_path)
 
@@ -318,16 +364,20 @@ class TestCallCommand:
 
             result = runner.invoke(
                 main,
-                ["--json", "call", "github", "create_issue", '{"owner": "test", "repo": "test"}'],
+                [
+                    "--json",
+                    "call",
+                    "github",
+                    "create_issue",
+                    '{"owner": "test", "repo": "test"}',
+                ],
             )
 
             assert result.exit_code == 0
             parsed = json.loads(result.output)
             assert parsed["success"] is True
 
-    def test_call_no_arguments(
-        self, runner: CliRunner, tmp_path: Path, monkeypatch
-    ):
+    def test_call_no_arguments(self, runner: CliRunner, tmp_path: Path, monkeypatch):
         """Test calling a tool without arguments."""
         monkeypatch.chdir(tmp_path)
 
@@ -410,6 +460,7 @@ class TestConfigErrors:
         monkeypatch.chdir(tmp_path)
         # Isolate test from user's real config files
         import mcp_launchpad.config as config_module
+
         monkeypatch.setattr(config_module, "CONFIG_SEARCH_DIRS", [Path(".")])
 
         (tmp_path / "mcp.json").write_text("{ invalid json }")
@@ -420,13 +471,19 @@ class TestConfigErrors:
         assert "JSON" in result.output or "Error" in result.output
 
     def test_config_path_option(
-        self, runner: CliRunner, tmp_path: Path, sample_tools: list[ToolInfo], monkeypatch
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        sample_tools: list[ToolInfo],
+        monkeypatch,
     ):
         """Test --config option for custom config path."""
         monkeypatch.chdir(tmp_path)
 
         custom_config = tmp_path / "custom-config.json"
-        custom_config.write_text(json.dumps({"mcpServers": {"test": {"command": "test"}}}))
+        custom_config.write_text(
+            json.dumps({"mcpServers": {"test": {"command": "test"}}})
+        )
 
         with patch("mcp_launchpad.cli.ToolCache") as MockCache:
             mock_cache = MagicMock()
@@ -436,4 +493,3 @@ class TestConfigErrors:
             result = runner.invoke(main, ["--config", str(custom_config), "list"])
 
             assert result.exit_code == 0
-

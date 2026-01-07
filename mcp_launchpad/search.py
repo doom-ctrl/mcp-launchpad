@@ -83,7 +83,7 @@ class ToolSearcher:
         # Pair tools with scores and sort
         results = [
             SearchResult(tool=tool, score=float(score))
-            for tool, score in zip(self.tools, scores)
+            for tool, score in zip(self.tools, scores, strict=True)
             if score > 0
         ]
         results.sort(key=lambda r: r.score, reverse=True)
@@ -98,7 +98,7 @@ class ToolSearcher:
         try:
             regex = re.compile(pattern, re.IGNORECASE)
         except re.error as e:
-            raise ValueError(f"Invalid regex pattern: {e}")
+            raise ValueError(f"Invalid regex pattern: {e}") from e
 
         results = []
         for tool in self.tools:
@@ -106,9 +106,7 @@ class ToolSearcher:
             matches = list(regex.finditer(search_text))
             if matches:
                 # Score based on number of matches and their positions
-                score = len(matches) + sum(
-                    1.0 / (m.start() + 1) for m in matches
-                )
+                score = len(matches) + sum(1.0 / (m.start() + 1) for m in matches)
                 results.append(SearchResult(tool=tool, score=score))
 
         results.sort(key=lambda r: r.score, reverse=True)
@@ -153,4 +151,3 @@ class ToolSearcher:
             return self.search_exact(query, limit)
         else:
             raise ValueError(f"Unknown search method: {method}")
-

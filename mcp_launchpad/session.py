@@ -5,7 +5,6 @@ import os
 import subprocess
 import sys
 import time
-from pathlib import Path
 from typing import Any
 
 from .config import Config
@@ -23,7 +22,9 @@ from .platform import (
 DAEMON_START_TIMEOUT = int(os.environ.get("MCPL_DAEMON_START_TIMEOUT", "30"))
 
 # How long to wait between connection attempts (seconds)
-DAEMON_CONNECT_RETRY_DELAY = float(os.environ.get("MCPL_DAEMON_CONNECT_RETRY_DELAY", "0.2"))
+DAEMON_CONNECT_RETRY_DELAY = float(
+    os.environ.get("MCPL_DAEMON_CONNECT_RETRY_DELAY", "0.2")
+)
 
 
 class SessionClient:
@@ -105,7 +106,10 @@ class SessionClient:
             if response.action == "error":
                 error_msg = response.payload.get("error", "Unknown error")
                 # Add recovery suggestions for common errors (only if not already present)
-                if "connection timed out" in error_msg.lower() and "MCPL_CONNECTION_TIMEOUT" not in error_msg:
+                if (
+                    "connection timed out" in error_msg.lower()
+                    and "MCPL_CONNECTION_TIMEOUT" not in error_msg
+                ):
                     error_msg += (
                         "\n\nThe MCP server took too long to connect. Try:\n"
                         "  1. Check if the server command is correct in your config\n"
@@ -143,7 +147,7 @@ class SessionClient:
         log_context = ""
         if log_file.exists():
             try:
-                with open(log_file, "r") as f:
+                with open(log_file) as f:
                     lines = f.readlines()
                     if lines:
                         # Get last 10 lines (or fewer if file is smaller)
@@ -253,4 +257,3 @@ class SessionClient:
         finally:
             # Close the log handle in the parent process - the child has its own copy
             log_handle.close()
-

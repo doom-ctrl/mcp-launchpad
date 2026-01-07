@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, TextIO, cast
+from typing import Any, TextIO, cast
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -97,11 +98,12 @@ class ToolInfo:
                 example_args[param] = f"<{param}>"
 
         import json
+
         args_json = json.dumps(example_args)
         return f"mcpl call {self.server} {self.name} '{args_json}'"
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ToolInfo":
+    def from_dict(cls, data: dict[str, Any]) -> ToolInfo:
         """Create from dictionary."""
         return cls(
             server=data["server"],
@@ -130,7 +132,7 @@ class ConnectionManager:
         return self.config.servers[server_name]
 
     @asynccontextmanager
-    async def connect(self, server_name: str) -> AsyncGenerator[ClientSession, None]:
+    async def connect(self, server_name: str) -> AsyncGenerator[ClientSession]:
         """Connect to an MCP server and yield the session.
 
         This is a context manager that handles connection lifecycle.
@@ -141,7 +143,7 @@ class ConnectionManager:
         env = {**os.environ, **server_config.get_resolved_env()}
 
         # Check for missing required env vars
-        for key, value in server_config.env.items():
+        for _key, value in server_config.env.items():
             if value.startswith("${") and value.endswith("}"):
                 env_var = value[2:-1]
                 if not os.environ.get(env_var):
@@ -164,26 +166,35 @@ class ConnectionManager:
 
         # Use a temp file to capture stderr - we'll show it only on errors
         # This is needed because MCP's stdio_client requires a real file descriptor
-        with tempfile.NamedTemporaryFile(mode="w+", suffix=".stderr", delete=True) as stderr_tmp:
+        with tempfile.NamedTemporaryFile(
+            mode="w+", suffix=".stderr", delete=True
+        ) as stderr_tmp:
             # Cast to TextIO for type checker - NamedTemporaryFile in text mode is compatible
             stderr_file = cast(TextIO, stderr_tmp)
             try:
                 async with asyncio.timeout(CONNECTION_TIMEOUT):
-                    async with stdio_client(server_params, errlog=stderr_file) as (read, write):
+                    async with stdio_client(server_params, errlog=stderr_file) as (
+                        read,
+                        write,
+                    ):
                         async with ClientSession(read, write) as session:
                             await session.initialize()
                             yield session
-            except asyncio.TimeoutError:
+            except TimeoutError as e:
                 stderr_tmp.seek(0)
                 stderr_output = stderr_tmp.read()
-                stderr_info = f"\n\nServer output:\n{stderr_output}" if stderr_output.strip() else ""
+                stderr_info = (
+                    f"\n\nServer output:\n{stderr_output}"
+                    if stderr_output.strip()
+                    else ""
+                )
                 raise TimeoutError(
                     f"Connection to '{server_name}' timed out after {CONNECTION_TIMEOUT}s.\n\n"
                     f"The server may be slow to start or unresponsive.\n\n"
                     f"Command: {server_config.command} {' '.join(server_config.args)}"
                     f"{stderr_info}\n\n"
                     f"Try running the command manually to debug."
-                )
+                ) from e
             except FileNotFoundError as e:
                 raise FileNotFoundError(
                     f"Could not start '{server_name}' server.\n\n"
@@ -198,9 +209,7 @@ class ConnectionManager:
                 stderr_output = stderr_tmp.read()
                 if stderr_output.strip():
                     # Append stderr to the error message
-                    raise type(e)(
-                        f"{e}\n\nServer output:\n{stderr_output}"
-                    ) from e
+                    raise type(e)(f"{e}\n\nServer output:\n{stderr_output}") from e
                 raise
 
     async def list_tools(self, server_name: str) -> list[ToolInfo]:
@@ -212,7 +221,9 @@ class ConnectionManager:
                     server=server_name,
                     name=tool.name,
                     description=tool.description or "",
-                    input_schema=tool.inputSchema if hasattr(tool, "inputSchema") else {},
+                    input_schema=tool.inputSchema
+                    if hasattr(tool, "inputSchema")
+                    else {},
                 )
                 for tool in result.tools
             ]
@@ -224,4 +235,3 @@ class ConnectionManager:
         async with self.connect(server_name) as session:
             result = await session.call_tool(tool_name, arguments)
             return result
-

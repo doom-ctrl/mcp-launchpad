@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import ctypes
+    pass
 
 # Platform detection
 IS_WINDOWS = sys.platform == "win32"
@@ -81,6 +81,7 @@ def get_session_id() -> str:
     # Format: /var/folders/.../vscode-git-{session_id}.sock
     if git_ipc := os.environ.get("VSCODE_GIT_IPC_HANDLE"):
         import re
+
         if match := re.search(r"vscode-git-([a-f0-9]+)\.sock", git_ipc):
             return f"vscode-{match.group(1)}"
 
@@ -242,4 +243,3 @@ def _get_parent_pid_windows() -> int:
         kernel32.CloseHandle(snapshot)
 
     return os.getppid()  # Fallback
-
