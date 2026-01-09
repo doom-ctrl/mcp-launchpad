@@ -12,10 +12,8 @@ A lightweight CLI for efficiently discovering and executing tools from multiple 
 
 ## Requirements
 
-You must have uv installed to use this tool.
-
 - Python 3.13+
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) - a python package and environment manager
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) - Python package and environment manager
 
 ## Installation
 
@@ -27,7 +25,7 @@ uv tool install https://github.com/kenneth-liao/mcp-launchpad.git
 
 ## Quick Start
 
-### 1. Create a configuration file
+### 1. Set up your MCP servers
 
 Create `mcp.json` in your project directory (or `~/.claude/mcp.json` for global config):
 
@@ -49,7 +47,24 @@ Create `mcp.json` in your project directory (or `~/.claude/mcp.json` for global 
 }
 ```
 
+We use `mcp.json` (not `.mcp.json`) to avoid collision with Claude Code's convention.
+
+Configuration files are searched in this order:
+
+1. `mcp.json` (current directory)
+2. `.claude/mcp.json` (current directory)
+3. `~/.claude/mcp.json` (home directory)
+
 You can validate installation by running `mcpl list`. If you don't see any servers, restart your terminal and run `mcpl list --refresh`.
+
+#### Environment Variables
+
+Environment variables can be specified in the `mcp.json` file using `${VAR}` syntax. The variables will be resolved at runtime.
+
+**Note**: Environment variables must be available at runtime for servers to connect. MCP Launchpad automatically loads `.env` files from these locations (in priority order):
+
+1. `./.env` (current directory)
+2. `~/.claude/.env` (home directory)
 
 ### 2. Search for tools
 
@@ -69,7 +84,7 @@ mcpl call github list_issues '{"owner": "anthropics", "repo": "claude-code"}'
 
 ## MCPL with Claude Code
 
-MCP Launchpad works great with [Claude Code](https://claude.com/claude-code), giving Claude access to all your configured MCP tools via bash commands. To enable this, copy the included `CLAUDE.md` file which provides Claude with instructions on how to use `mcpl`.
+MCP Launchpad integrates with [Claude Code](https://claude.com/claude-code), giving Claude access to all your configured MCP tools via bash. Copy the included `CLAUDE.md` to teach Claude how to use `mcpl`.
 
 ### Option 1: Project-Level Setup
 
@@ -79,17 +94,15 @@ Copy `CLAUDE.md` to your project root:
 curl -o CLAUDE.md https://raw.githubusercontent.com/kenneth-liao/mcp-launchpad/main/CLAUDE.md
 ```
 
-This teaches Claude how to use `mcpl` within that specific project.
-
 ### Option 2: Global Setup
 
-Copy `CLAUDE.md` to your user-level Claude directory:
+For access across all projects, copy to your user-level Claude directory:
 
 ```bash
 curl -o ~/.claude/CLAUDE.md https://raw.githubusercontent.com/kenneth-liao/mcp-launchpad/main/CLAUDE.md
 ```
 
-This makes `mcpl` available to Claude Code across all your projects.
+**Tip**: Add a section to your `CLAUDE.md` listing your connected MCP servers for better tool discovery.
 
 ### What This Enables
 
@@ -189,40 +202,6 @@ Test that all configured servers can connect and respond.
 mcpl verify             # Test all servers
 mcpl verify --timeout 60  # With custom timeout
 ```
-
-## Configuration
-
-MCP Launchpad searches for configuration files in this order:
-
-1. `.mcp.json` (current directory)
-2. `mcp.json` (current directory)
-3. `.claude/mcp.json` (current directory)
-4. `~/.claude/mcp.json` (home directory)
-
-Environment variables can be loaded from:
-
-1. `.env` (current directory)
-2. `~/.claude/.env` (home directory)
-
-### Server Configuration Format
-
-```json
-{
-  "mcpServers": {
-    "server-name": {
-      "command": "executable",
-      "args": ["arg1", "arg2"],
-      "env": {
-        "API_KEY": "${API_KEY}"
-      }
-    }
-  }
-}
-```
-
-- `command`: The executable to run (e.g., `uvx`, `npx`, `python`)
-- `args`: Command line arguments for the server
-- `env`: Environment variables (supports `${VAR}` syntax for referencing existing env vars)
 
 ## JSON Mode
 
