@@ -62,7 +62,8 @@ class Config:
 CONFIG_SEARCH_DIRS = [
     Path("."),  # Current directory
     Path(".claude"),  # Project-level .claude directory
-    Path.home() / ".claude",  # User-level .claude directory
+    Path.home() / ".claude",  # User-level .claude directory (macOS/Windows)
+    Path.home() / ".config" / "claude",  # XDG standard (Linux)
 ]
 
 # File to exclude (Claude Code's convention - avoids collision)
