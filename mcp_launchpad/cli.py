@@ -555,8 +555,11 @@ def list_cmd(ctx: click.Context, server: str | None, refresh: bool) -> None:
                 else:
                     click.echo()
             click.echo(f"\nConfig: {config.config_path}")
-            if config.env_path:
-                click.echo(f"Env: {config.env_path}")
+            if config.env_paths:
+                if len(config.env_paths) == 1:
+                    click.echo(f"Env: {config.env_paths[0]}")
+                else:
+                    click.echo(f"Env: {', '.join(str(p) for p in config.env_paths)}")
 
 
 @main.group()
@@ -787,14 +790,17 @@ def show_config(ctx: click.Context, show_secrets: bool) -> None:
         output.success(
             {
                 "configPath": str(config.config_path) if config.config_path else None,
-                "envPath": str(config.env_path) if config.env_path else None,
+                "envPaths": [str(p) for p in config.env_paths] if config.env_paths else [],
                 "servers": servers_data,
             }
         )
     else:
         click.secho("\nMCP Configuration\n", bold=True)
         click.echo(f"  Config file: {config.config_path or 'Not found'}")
-        click.echo(f"  Env file: {config.env_path or 'Not found'}")
+        if config.env_paths:
+            click.echo(f"  Env files: {', '.join(str(p) for p in config.env_paths)}")
+        else:
+            click.echo("  Env file: Not found")
 
         click.secho("\nConfigured Servers:\n", bold=True)
         for name, server in config.servers.items():

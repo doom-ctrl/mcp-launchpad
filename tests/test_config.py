@@ -12,6 +12,7 @@ from mcp_launchpad.config import (
     find_config_file,
     find_config_files,
     find_env_file,
+    find_env_files,
     load_config,
     parse_server_config,
 )
@@ -396,14 +397,102 @@ class TestFindEnvFile:
         assert result is None
 
     def test_project_level_env(self, tmp_path: Path, monkeypatch):
-        """Test project-level .env is found."""
+        """Test project-level .env is found when no global exists."""
         monkeypatch.chdir(tmp_path)
+        # Mock home directory to isolate from real ~/.claude/.env
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        monkeypatch.setenv("HOME", str(fake_home))
+        # Clear Path.home() cache
+        import pathlib
+
+        monkeypatch.setattr(pathlib.Path, "home", lambda: fake_home)
+
         env_file = tmp_path / ".env"
         env_file.write_text("KEY=value")
         result = find_env_file(None)
         # Compare resolved paths since function may return relative path
         assert result is not None
         assert result.resolve() == env_file.resolve()
+
+
+class TestFindEnvFiles:
+    """Tests for find_env_files function."""
+
+    def test_loads_both_global_and_local(self, tmp_path: Path, monkeypatch):
+        """Test that both global and local .env files are found."""
+        monkeypatch.chdir(tmp_path)
+        # Set up fake home with global .env
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        claude_dir = fake_home / ".claude"
+        claude_dir.mkdir()
+        global_env = claude_dir / ".env"
+        global_env.write_text("GLOBAL_VAR=global")
+        import pathlib
+
+        monkeypatch.setattr(pathlib.Path, "home", lambda: fake_home)
+
+        # Create local .env
+        local_env = tmp_path / ".env"
+        local_env.write_text("LOCAL_VAR=local")
+
+        result = find_env_files(None)
+
+        # Should return both files: global first, then local
+        assert len(result) == 2
+        assert result[0].resolve() == global_env.resolve()
+        assert result[1].resolve() == local_env.resolve()
+
+    def test_global_only(self, tmp_path: Path, monkeypatch):
+        """Test when only global .env exists."""
+        monkeypatch.chdir(tmp_path)
+        # Set up fake home with global .env
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        claude_dir = fake_home / ".claude"
+        claude_dir.mkdir()
+        global_env = claude_dir / ".env"
+        global_env.write_text("GLOBAL_VAR=global")
+        import pathlib
+
+        monkeypatch.setattr(pathlib.Path, "home", lambda: fake_home)
+
+        result = find_env_files(None)
+
+        assert len(result) == 1
+        assert result[0].resolve() == global_env.resolve()
+
+    def test_local_only(self, tmp_path: Path, monkeypatch):
+        """Test when only local .env exists."""
+        monkeypatch.chdir(tmp_path)
+        # Set up fake home without global .env
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        import pathlib
+
+        monkeypatch.setattr(pathlib.Path, "home", lambda: fake_home)
+
+        # Create local .env
+        local_env = tmp_path / ".env"
+        local_env.write_text("LOCAL_VAR=local")
+
+        result = find_env_files(None)
+
+        assert len(result) == 1
+        assert result[0].resolve() == local_env.resolve()
+
+    def test_neither_exists(self, tmp_path: Path, monkeypatch):
+        """Test when no .env files exist."""
+        monkeypatch.chdir(tmp_path)
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        import pathlib
+
+        monkeypatch.setattr(pathlib.Path, "home", lambda: fake_home)
+
+        result = find_env_files(None)
+        assert result == []
 
 
 class TestParseServerConfig:
@@ -547,6 +636,12 @@ class TestLoadConfig:
     def test_load_with_env_file(self, tmp_path: Path, monkeypatch):
         """Test loading config with .env file."""
         monkeypatch.chdir(tmp_path)
+        # Mock home directory to isolate from real ~/.claude/.env
+        fake_home = tmp_path / "fake_home"
+        fake_home.mkdir()
+        import pathlib
+
+        monkeypatch.setattr(pathlib.Path, "home", lambda: fake_home)
 
         # Create config
         config_data = {"mcpServers": {"test": {"command": "python"}}}

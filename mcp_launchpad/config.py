@@ -55,7 +55,8 @@ class Config:
     servers: dict[str, ServerConfig] = field(default_factory=dict)
     config_path: Path | None = None  # Primary config (first found)
     config_paths: list[Path] = field(default_factory=list)  # All config files loaded
-    env_path: Path | None = None
+    env_path: Path | None = None  # Primary env file (for display)
+    env_paths: list[Path] = field(default_factory=list)  # All env files loaded
 
 
 # Directories to search for config files, in priority order
@@ -69,11 +70,6 @@ CONFIG_SEARCH_DIRS = [
 # File to exclude (Claude Code's convention - avoids collision)
 EXCLUDED_CONFIG_FILES = {".mcp.json"}
 
-# Env file search paths in priority order
-ENV_SEARCH_PATHS = [
-    Path(".env"),
-    Path.home() / ".claude" / ".env",
-]
 
 
 def find_config_files(explicit_path: Path | None = None) -> list[Path]:
@@ -126,17 +122,38 @@ def find_config_file(explicit_path: Path | None = None) -> Path | None:
     return files[0] if files else None
 
 
-def find_env_file(explicit_path: Path | None = None) -> Path | None:
-    """Find the .env file, checking project then user level."""
+def find_env_files(explicit_path: Path | None = None) -> list[Path]:
+    """Find all .env files to load, in order (global first, then local for overrides).
+
+    Returns files in load order: global ~/.claude/.env first, then local .env.
+    This allows project-specific overrides while still getting global defaults.
+    """
     if explicit_path:
         if explicit_path.exists():
-            return explicit_path
-        return None
+            return [explicit_path]
+        return []
 
-    for path in ENV_SEARCH_PATHS:
-        if path.exists():
-            return path
-    return None
+    found: list[Path] = []
+    # Load global env first (provides defaults)
+    global_env = Path.home() / ".claude" / ".env"
+    if global_env.exists():
+        found.append(global_env)
+
+    # Load local env second (can override globals)
+    local_env = Path(".env")
+    if local_env.exists():
+        found.append(local_env)
+
+    return found
+
+
+def find_env_file(explicit_path: Path | None = None) -> Path | None:
+    """Find the primary .env file (for display purposes).
+
+    Returns the first env file found. Use find_env_files() for actual loading.
+    """
+    files = find_env_files(explicit_path)
+    return files[0] if files else None
 
 
 def parse_server_config(name: str, data: dict[str, Any]) -> ServerConfig:
@@ -169,9 +186,9 @@ def load_config(
         FileNotFoundError: If no config file is found
         json.JSONDecodeError: If any config file is invalid JSON
     """
-    # Find and load .env file first
-    env_file = find_env_file(env_path)
-    if env_file:
+    # Find and load .env files (global first, then local for overrides)
+    env_files = find_env_files(env_path)
+    for env_file in env_files:
         load_dotenv(env_file)
 
     # Find all config files
@@ -207,5 +224,6 @@ def load_config(
         servers=servers,
         config_path=config_files[0] if config_files else None,
         config_paths=config_files,
-        env_path=env_file,
+        env_path=env_files[0] if env_files else None,
+        env_paths=env_files,
     )

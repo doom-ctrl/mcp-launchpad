@@ -61,10 +61,12 @@ You can validate installation by running `mcpl list`. If you don't see any serve
 
 Environment variables can be specified in the `mcp.json` file using `${VAR}` syntax. The variables will be resolved at runtime.
 
-**Note**: Environment variables must be available at runtime for servers to connect. MCP Launchpad automatically loads `.env` files from these locations (in priority order):
+**Note**: Environment variables must be available at runtime for servers to connect. MCP Launchpad automatically loads `.env` files from these locations (both are loaded, in order):
 
-1. `./.env` (current directory)
-2. `~/.claude/.env` (home directory)
+1. `~/.claude/.env` (global defaults)
+2. `./.env` (project-specific overrides)
+
+This allows you to store API keys globally in `~/.claude/.env` while still supporting project-specific overrides via a local `.env` file.
 
 ### 2. Search for tools
 
