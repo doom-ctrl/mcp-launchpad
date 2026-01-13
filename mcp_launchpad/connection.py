@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import tempfile
 from collections.abc import AsyncGenerator
@@ -10,11 +11,16 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any, TextIO, cast
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Tool
 
 from .config import Config, ServerConfig
+
+# Logger for connection management
+logger = logging.getLogger("mcpl.connection")
 
 # Connection timeout in seconds (configurable via MCPL_CONNECTION_TIMEOUT env var)
 CONNECTION_TIMEOUT = int(os.environ.get("MCPL_CONNECTION_TIMEOUT", "45"))
@@ -136,9 +142,88 @@ class ConnectionManager:
         """Connect to an MCP server and yield the session.
 
         This is a context manager that handles connection lifecycle.
+        Supports both stdio and HTTP transport types.
         """
         server_config = self.get_server_config(server_name)
 
+        if server_config.is_http():
+            async with self._connect_http(server_name, server_config) as session:
+                yield session
+        else:
+            async with self._connect_stdio(server_name, server_config) as session:
+                yield session
+
+    @asynccontextmanager
+    async def _connect_http(
+        self, server_name: str, server_config: ServerConfig
+    ) -> AsyncGenerator[ClientSession]:
+        """Connect to an HTTP-based MCP server."""
+        url = server_config.get_resolved_url()
+        headers = server_config.get_resolved_headers()
+        logger.debug(f"Connecting to HTTP server '{server_name}' at {url}")
+
+        if not url:
+            raise ValueError(
+                f"HTTP server '{server_name}' is missing 'url' in configuration.\n\n"
+                f"Example config:\n"
+                f'{{\n  "mcpServers": {{\n'
+                f'    "{server_name}": {{\n'
+                f'      "type": "http",\n'
+                f'      "url": "https://example.com/mcp"\n'
+                f"    }}\n  }}\n}}"
+            )
+
+        # Create httpx client with headers if provided
+        http_client = httpx.AsyncClient(
+            headers=headers,
+            timeout=httpx.Timeout(CONNECTION_TIMEOUT, connect=30.0),
+        )
+
+        try:
+            async with asyncio.timeout(CONNECTION_TIMEOUT):
+                # terminate_on_close=False: Skip DELETE request for session cleanup
+                # Many servers (like Supabase) don't implement this endpoint and return 404
+                # HTTP connections are stateless anyway, so cleanup happens naturally
+                async with streamable_http_client(
+                    url, http_client=http_client, terminate_on_close=False
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        logger.debug(f"HTTP connection to '{server_name}' initialized")
+                        yield session
+                        logger.debug(f"HTTP connection to '{server_name}' closing")
+        except TimeoutError as e:
+            raise TimeoutError(
+                f"Connection to '{server_name}' timed out after {CONNECTION_TIMEOUT}s.\n\n"
+                f"The HTTP server may be slow or unresponsive.\n\n"
+                f"URL: {url}\n\n"
+                f"Try increasing timeout: export MCPL_CONNECTION_TIMEOUT=120"
+            ) from e
+        except httpx.HTTPStatusError as e:
+            raise ValueError(
+                f"HTTP error connecting to '{server_name}': {e.response.status_code}\n\n"
+                f"URL: {url}\n\n"
+                f"Response: {e.response.text[:500] if e.response.text else 'No response body'}"
+            ) from e
+        except httpx.ConnectError as e:
+            raise ConnectionError(
+                f"Could not connect to '{server_name}' HTTP server.\n\n"
+                f"URL: {url}\n\n"
+                f"Error: {e}\n\n"
+                f"Check that the URL is correct and the server is running."
+            ) from e
+        finally:
+            await http_client.aclose()
+
+    @asynccontextmanager
+    async def _connect_stdio(
+        self, server_name: str, server_config: ServerConfig
+    ) -> AsyncGenerator[ClientSession]:
+        """Connect to a stdio-based MCP server."""
+        logger.debug(
+            f"Connecting to stdio server '{server_name}': "
+            f"{server_config.command} {' '.join(server_config.args)}"
+        )
         # Build environment with resolved variables
         env = {**os.environ, **server_config.get_resolved_env()}
 
@@ -179,7 +264,9 @@ class ConnectionManager:
                     ):
                         async with ClientSession(read, write) as session:
                             await session.initialize()
+                            logger.debug(f"Stdio connection to '{server_name}' initialized")
                             yield session
+                            logger.debug(f"Stdio connection to '{server_name}' closing")
             except TimeoutError as e:
                 stderr_tmp.seek(0)
                 stderr_output = stderr_tmp.read()

@@ -1,6 +1,7 @@
 """Tool index caching for fast search without connecting to servers."""
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -9,6 +10,9 @@ from typing import Any
 
 from .config import Config
 from .connection import ConnectionManager, ToolInfo
+
+# Logger for cache operations
+logger = logging.getLogger("mcpl.cache")
 
 # Default cache TTL (24 hours)
 DEFAULT_CACHE_TTL_HOURS = 24
@@ -99,25 +103,31 @@ class ToolCache:
         """Check if cache is still valid."""
         metadata = self._load_metadata()
         if not metadata:
+            logger.debug("Cache miss: no metadata found")
             return False
 
         # Check if config file changed
         current_mtime = self._get_config_mtime()
         if current_mtime != metadata.config_mtime:
+            logger.debug("Cache miss: config file changed")
             return False
 
         # Check if cache is expired
         age = datetime.now() - metadata.last_updated
         if age > timedelta(hours=ttl_hours):
+            logger.debug(f"Cache miss: expired (age={age})")
             return False
 
+        logger.debug(f"Cache hit: valid (age={age})")
         return True
 
     def get_tools(self) -> list[ToolInfo]:
         """Get cached tools (empty list if cache invalid)."""
         if not self.is_cache_valid():
             return []
-        return self._load_tools()
+        tools = self._load_tools()
+        logger.debug(f"Loaded {len(tools)} tools from cache")
+        return tools
 
     async def refresh(
         self,
@@ -169,6 +179,9 @@ class ToolCache:
                 config_mtime=self._get_config_mtime(),
                 server_update_times=server_times,
             )
+        )
+        logger.debug(
+            f"Cache refreshed: {len(all_tools)} tools from {len(server_times)} servers"
         )
 
         if errors and not all_tools:
