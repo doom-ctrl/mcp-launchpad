@@ -1,6 +1,7 @@
 """Session client for communicating with the daemon."""
 
 import asyncio
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,9 @@ import time
 from typing import Any
 
 from .config import Config
+
+# Logger for session client
+logger = logging.getLogger("mcpl.session")
 from .ipc import IPCMessage, connect_to_daemon, read_message, write_message
 from .platform import (
     IS_WINDOWS,
@@ -66,8 +70,10 @@ class SessionClient:
         """Request daemon shutdown."""
         try:
             await self._send_request(IPCMessage(action="shutdown", payload={}))
-        except Exception:
-            pass  # Daemon may close connection before responding
+            logger.debug("Daemon shutdown request sent successfully")
+        except Exception as e:
+            # Daemon may close connection before responding - this is expected
+            logger.debug(f"Daemon shutdown request completed (connection closed: {e})")
 
     async def _send_request(self, message: IPCMessage) -> IPCMessage:
         """Send a request to the daemon and get the response."""

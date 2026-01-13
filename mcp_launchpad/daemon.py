@@ -38,11 +38,22 @@ PARENT_CHECK_INTERVAL = int(os.environ.get("MCPL_PARENT_CHECK_INTERVAL", "5"))
 # Connection timeout for MCP servers (seconds) - configurable via env
 CONNECTION_TIMEOUT = int(os.environ.get("MCPL_CONNECTION_TIMEOUT", "45"))
 
-# Delay before retrying a failed server connection (seconds)
+# Base delay before retrying a failed server connection (seconds)
+# Actual delay uses exponential backoff: base * 2^(attempt-1)
 RECONNECT_DELAY = int(os.environ.get("MCPL_RECONNECT_DELAY", "5"))
 
 # Maximum reconnection attempts before giving up
 MAX_RECONNECT_ATTEMPTS = int(os.environ.get("MCPL_MAX_RECONNECT_ATTEMPTS", "3"))
+
+
+def _get_backoff_delay(attempt: int, base_delay: int = RECONNECT_DELAY) -> int:
+    """Calculate exponential backoff delay for reconnection attempts.
+
+    Returns base_delay * 2^(attempt-1), capped at 60 seconds.
+    For default base_delay=5: attempt 1 -> 5s, attempt 2 -> 10s, attempt 3 -> 20s
+    """
+    delay = base_delay * (2 ** (attempt - 1))
+    return int(min(delay, 60))  # Cap at 60 seconds
 
 # Idle timeout for daemon shutdown (seconds) - 0 to disable
 # In IDE environments, daemon shuts down after this period of inactivity
@@ -173,11 +184,12 @@ class Daemon:
         while self.state.running and attempt < MAX_RECONNECT_ATTEMPTS:
             attempt += 1
 
-            server_state = self.state.servers.get(server_name)
-            if not server_state:
+            existing_state = self.state.servers.get(server_name)
+            if not existing_state:
                 server_state = ServerState(name=server_name)
                 self.state.servers[server_name] = server_state
             else:
+                server_state = existing_state
                 server_state.error = None
 
             # Create httpx client with headers
@@ -232,13 +244,14 @@ class Daemon:
                 await http_client.aclose()
                 server_state.http_client = None
 
-            # Wait before retrying
+            # Wait before retrying with exponential backoff
             if self.state.running and attempt < MAX_RECONNECT_ATTEMPTS:
+                delay = _get_backoff_delay(attempt)
                 logger.info(
-                    f"Server {server_name}: retrying in {RECONNECT_DELAY}s "
+                    f"Server {server_name}: retrying in {delay}s "
                     f"(attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})"
                 )
-                await asyncio.sleep(RECONNECT_DELAY)
+                await asyncio.sleep(delay)
 
         if attempt >= MAX_RECONNECT_ATTEMPTS:
             logger.error(
@@ -263,9 +276,9 @@ class Daemon:
                 env=env,
             )
 
-            # Create stderr capture file
+            # Create stderr capture file with mcpl- prefix for easy identification
             stderr_tmp = tempfile.NamedTemporaryFile(
-                mode="w+", suffix=f".{server_name}.stderr", delete=False
+                mode="w+", prefix="mcpl-", suffix=f".{server_name}.stderr", delete=False
             )
             # Cast to TextIO for type checker
             stderr_file = cast(TextIO, stderr_tmp)
@@ -347,13 +360,14 @@ class Daemon:
                     except Exception as e:
                         logger.debug(f"Failed to cleanup stderr file: {e}")
 
-            # Wait before retrying
+            # Wait before retrying with exponential backoff
             if self.state.running and attempt < MAX_RECONNECT_ATTEMPTS:
+                delay = _get_backoff_delay(attempt)
                 logger.info(
-                    f"Server {server_name}: retrying in {RECONNECT_DELAY}s "
+                    f"Server {server_name}: retrying in {delay}s "
                     f"(attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})"
                 )
-                await asyncio.sleep(RECONNECT_DELAY)
+                await asyncio.sleep(delay)
 
         if attempt >= MAX_RECONNECT_ATTEMPTS:
             logger.error(
@@ -491,8 +505,15 @@ class Daemon:
                 for t in tools_result.tools
             ]
             tool_exists = any(t.name == tool_name for t in available_tools)
-        except Exception:
+        except Exception as e:
             # If we can't list tools, proceed anyway - the call will fail with its own error
+            logger.debug(
+                f"Failed to list tools for pre-check on '{server_name}': {e}"
+            )
+            logger.warning(
+                f"Could not verify tool '{tool_name}' on '{server_name}'. "
+                "Proceeding with call - error suggestions may be limited if it fails."
+            )
             tool_exists = True  # Assume it exists, let the call fail naturally
 
         if not tool_exists:
@@ -731,13 +752,14 @@ class Daemon:
     def _cleanup_orphaned_stderr_files(self) -> None:
         """Clean up orphaned stderr files from previous daemon runs.
 
-        These files are created in the system temp directory with a .stderr suffix.
-        If the daemon crashed previously, these files may remain.
+        These files are created in the system temp directory with mcpl- prefix
+        and .stderr suffix. If the daemon crashed previously, these files may remain.
         """
         import glob
 
         temp_dir = tempfile.gettempdir()
-        pattern = os.path.join(temp_dir, "*.stderr")
+        # Use specific pattern to avoid matching unrelated files
+        pattern = os.path.join(temp_dir, "mcpl-*.stderr")
         orphaned_files = glob.glob(pattern)
 
         if orphaned_files:
@@ -753,10 +775,14 @@ class Daemon:
 async def run_daemon(config_path: Path | None = None) -> None:
     """Run the daemon with the given configuration."""
     # Set up logging for daemon
+    # Use force=True to ensure logging is configured even if basicConfig was called before
+    # (e.g., in tests or when running in same process)
+    log_level = os.environ.get("MCPL_LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.StreamHandler()],
+        force=True,
     )
 
     config = load_config(config_path)

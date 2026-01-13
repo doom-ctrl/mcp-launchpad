@@ -104,13 +104,39 @@ class UnixIPCServer(IPCServer):
 
     async def start(self) -> None:
         """Start listening on Unix socket."""
-        # Remove stale socket file if it exists
+        # Check if socket file exists and if it's actually in use
         if self.socket_path.exists():
+            if await self._is_socket_in_use():
+                raise RuntimeError(
+                    f"Socket {self.socket_path} is already in use by another process. "
+                    "Another daemon may be running. Use 'mcpl session stop' first."
+                )
+            # Socket exists but not in use - safe to remove (stale)
+            logger.debug(f"Removing stale socket file: {self.socket_path}")
             self.socket_path.unlink()
 
         self.server = await asyncio.start_unix_server(
             self._handle_client, path=str(self.socket_path)
         )
+
+    async def _is_socket_in_use(self) -> bool:
+        """Check if the socket file is actually in use by trying to connect."""
+        try:
+            _reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(self.socket_path)),
+                timeout=1.0,
+            )
+            # Connection succeeded - socket is in use
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except (ConnectionRefusedError, FileNotFoundError, asyncio.TimeoutError):
+            # Socket file exists but no one is listening - it's stale
+            return False
+        except Exception as e:
+            logger.debug(f"Error checking socket: {e}")
+            # Assume stale on any other error
+            return False
 
     async def stop(self) -> None:
         """Stop the server and cleanup."""
@@ -319,9 +345,7 @@ async def _connect_windows(
     if handle == INVALID_HANDLE_VALUE:
         return None
 
-    # Wrap handle in asyncio streams
-    # Note: This is a simplified approach. For production, consider using
-    # asyncio.open_connection with a custom transport or a library like aioconsole
+    # Create asyncio-compatible streams from the pipe handle
     return _create_pipe_streams(kernel32, handle)
 
 
@@ -333,33 +357,88 @@ def _create_pipe_streams(
     Note: This is a simplified implementation for Windows named pipes.
     Windows support is experimental and may have limitations.
     """
-    # Create a simple wrapper that provides read/write operations
-    reader = asyncio.StreamReader()
+    import ctypes  # noqa: PLC0415
 
-    # For Windows, we use a simplified writer that wraps the pipe handle
-    class PipeWriter:
+    BUFFER_SIZE = 65536
+
+    # For Windows, we create a custom reader/writer that wraps the pipe handle
+    class PipeReader:
+        """Async reader that reads from a Windows pipe handle."""
+
         def __init__(self, kernel32: Any, handle: Any) -> None:
             self.kernel32 = kernel32
             self.handle = handle
+            self._buffer = b""
+            self._eof = False
+
+        async def _read_from_pipe(self, size: int) -> bytes:
+            """Read data from the pipe handle in a thread."""
+            buffer = ctypes.create_string_buffer(size)
+            bytes_read = ctypes.c_ulong(0)
+
+            # Read in thread to avoid blocking
+            success = await asyncio.to_thread(
+                self.kernel32.ReadFile,
+                self.handle,
+                buffer,
+                size,
+                ctypes.byref(bytes_read),
+                None,
+            )
+
+            if success and bytes_read.value > 0:
+                return buffer.raw[: bytes_read.value]
+            return b""
+
+        async def readexactly(self, n: int) -> bytes:
+            """Read exactly n bytes from the pipe."""
+            while len(self._buffer) < n:
+                if self._eof:
+                    raise asyncio.IncompleteReadError(self._buffer, n)
+                chunk = await self._read_from_pipe(BUFFER_SIZE)
+                if not chunk:
+                    self._eof = True
+                    raise asyncio.IncompleteReadError(self._buffer, n)
+                self._buffer += chunk
+
+            result = self._buffer[:n]
+            self._buffer = self._buffer[n:]
+            return result
+
+    class PipeWriter:
+        """Writer that writes to a Windows pipe handle."""
+
+        def __init__(self, kernel32: Any, handle: Any) -> None:
+            self.kernel32 = kernel32
+            self.handle = handle
+            self._closed = False
 
         def write(self, data: bytes) -> None:
-            import ctypes  # noqa: PLC0415
-
+            """Write data to the pipe (synchronous, buffered)."""
+            if self._closed:
+                return
             bytes_written = ctypes.c_ulong(0)
             self.kernel32.WriteFile(
                 self.handle, data, len(data), ctypes.byref(bytes_written), None
             )
 
         async def drain(self) -> None:
+            """Flush the write buffer (no-op for pipes)."""
             pass
 
         def close(self) -> None:
-            self.kernel32.CloseHandle(self.handle)
+            """Close the pipe handle."""
+            if not self._closed:
+                self.kernel32.CloseHandle(self.handle)
+                self._closed = True
 
         async def wait_closed(self) -> None:
+            """Wait for close to complete (no-op)."""
             pass
 
-    return reader, PipeWriter(kernel32, handle)
+    reader = PipeReader(kernel32, handle)
+    writer = PipeWriter(kernel32, handle)
+    return reader, writer  # type: ignore[return-value]
 
 
 def create_ipc_server(handler: IPCHandler) -> IPCServer:

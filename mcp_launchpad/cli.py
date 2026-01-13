@@ -41,8 +41,14 @@ def _check_tool_exists(
         available_tools = asyncio.run(manager.list_tools(server))
         tool_exists = any(t.name == tool for t in available_tools)
         return tool_exists, available_tools
-    except Exception:
-        # If we can't list tools, assume it exists
+    except Exception as e:
+        # Log the error but continue - we'll let the actual tool call fail
+        # with a proper error message if the tool doesn't exist
+        logger.debug(f"Failed to verify tool '{tool}' on server '{server}': {e}")
+        logger.warning(
+            f"Could not verify tool existence on '{server}'. "
+            "Proceeding with tool call - error suggestions may be limited if it fails."
+        )
         return True, []
 
 

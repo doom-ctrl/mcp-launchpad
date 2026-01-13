@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import tempfile
 from collections.abc import AsyncGenerator
@@ -17,6 +18,9 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.types import Tool
 
 from .config import Config, ServerConfig
+
+# Logger for connection management
+logger = logging.getLogger("mcpl.connection")
 
 # Connection timeout in seconds (configurable via MCPL_CONNECTION_TIMEOUT env var)
 CONNECTION_TIMEOUT = int(os.environ.get("MCPL_CONNECTION_TIMEOUT", "45"))
@@ -156,6 +160,7 @@ class ConnectionManager:
         """Connect to an HTTP-based MCP server."""
         url = server_config.get_resolved_url()
         headers = server_config.get_resolved_headers()
+        logger.debug(f"Connecting to HTTP server '{server_name}' at {url}")
 
         if not url:
             raise ValueError(
@@ -184,7 +189,9 @@ class ConnectionManager:
                 ) as (read, write, _get_session_id):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
+                        logger.debug(f"HTTP connection to '{server_name}' initialized")
                         yield session
+                        logger.debug(f"HTTP connection to '{server_name}' closing")
         except TimeoutError as e:
             raise TimeoutError(
                 f"Connection to '{server_name}' timed out after {CONNECTION_TIMEOUT}s.\n\n"
@@ -213,6 +220,10 @@ class ConnectionManager:
         self, server_name: str, server_config: ServerConfig
     ) -> AsyncGenerator[ClientSession]:
         """Connect to a stdio-based MCP server."""
+        logger.debug(
+            f"Connecting to stdio server '{server_name}': "
+            f"{server_config.command} {' '.join(server_config.args)}"
+        )
         # Build environment with resolved variables
         env = {**os.environ, **server_config.get_resolved_env()}
 
@@ -253,7 +264,9 @@ class ConnectionManager:
                     ):
                         async with ClientSession(read, write) as session:
                             await session.initialize()
+                            logger.debug(f"Stdio connection to '{server_name}' initialized")
                             yield session
+                            logger.debug(f"Stdio connection to '{server_name}' closing")
             except TimeoutError as e:
                 stderr_tmp.seek(0)
                 stderr_output = stderr_tmp.read()
