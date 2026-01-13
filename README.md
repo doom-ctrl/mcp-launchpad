@@ -6,6 +6,7 @@ A lightweight CLI for efficiently discovering and executing tools from multiple 
 
 - **Unified Tool Discovery** - Search across all configured MCP servers with BM25, regex, or exact matching
 - **Persistent Connections** - Session daemon maintains server connections for faster repeated calls
+- **HTTP & Stdio Support** - Connect to both local process-based servers and remote HTTP/Streamable MCP servers
 - **Auto-Configuration** - Reads from `./mcp.json` (project-level) or `~/.claude/mcp.json` (user-level) for seamless integration
 - **Cross-Platform** - Works on macOS, Linux, and Windows (experimental)
 - **JSON Mode** - Machine-readable output for scripting and automation
@@ -42,10 +43,21 @@ Create `mcp.json` in your project directory (or `~/.claude/mcp.json` for global 
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@anthropic/mcp-server-filesystem", "/path/to/allowed/dir"]
+    },
+    "supabase": {
+      "type": "http",
+      "url": "https://your-project.supabase.co/functions/v1/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SUPABASE_ANON_KEY}"
+      }
     }
   }
 }
 ```
+
+MCP Launchpad supports two transport types:
+- **stdio** (default): Local process-based servers using `command` and `args`
+- **http**: Remote HTTP/Streamable MCP servers using `url` and optional `headers`
 
 We use `mcp.json` (not `.mcp.json`) to avoid collision with Claude Code's convention.
 
@@ -253,6 +265,53 @@ mcpl call github list_repos '{}' --no-daemon
 If you encounter persistent issues, stopping and restarting the daemon usually resolves them.
 
 ## Advanced Configuration
+
+### HTTP Server Configuration
+
+HTTP/Streamable MCP servers allow you to connect to remote MCP endpoints over HTTP instead of spawning local processes.
+
+#### Basic HTTP Server
+
+```json
+{
+  "mcpServers": {
+    "remote-api": {
+      "type": "http",
+      "url": "https://api.example.com/mcp"
+    }
+  }
+}
+```
+
+#### With Authentication Headers
+
+```json
+{
+  "mcpServers": {
+    "authenticated-api": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${API_TOKEN}",
+        "X-Custom-Header": "value"
+      }
+    }
+  }
+}
+```
+
+#### HTTP Configuration Options
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | Yes | Must be `"http"` for HTTP servers |
+| `url` | Yes | Full URL to the MCP endpoint |
+| `headers` | No | HTTP headers to include with requests (supports `${VAR}` syntax) |
+
+**Notes:**
+- Environment variables in `url` and `headers` are resolved using `${VAR}` syntax
+- HTTP servers use the [Streamable HTTP transport](https://modelcontextprotocol.io/docs/concepts/transports#streamable-http) from the MCP specification
+- Connection timeout is controlled by `MCPL_CONNECTION_TIMEOUT` (default: 45 seconds)
 
 ### Environment Variables
 
