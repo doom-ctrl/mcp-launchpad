@@ -175,10 +175,11 @@ class TestGetSocketPath:
         assert isinstance(path, Path)
 
     def test_includes_session_id(self, monkeypatch):
-        """Test that socket path includes session ID."""
-        monkeypatch.setenv("MCPL_SESSION_ID", "unique-session-456")
+        """Test that socket path includes session ID (short IDs are preserved)."""
+        # Use a short session ID (<=16 chars) to avoid hashing
+        monkeypatch.setenv("MCPL_SESSION_ID", "sess-456")
         path = get_socket_path()
-        assert "unique-session-456" in str(path)
+        assert "sess-456" in str(path)
 
     @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
     def test_unix_socket_path_format(self, monkeypatch):
@@ -187,6 +188,23 @@ class TestGetSocketPath:
         path = get_socket_path()
         assert path.suffix == ".sock"
         assert str(os.getuid()) in str(path)
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_long_session_id_is_hashed(self, monkeypatch):
+        """Test that long session IDs are hashed to avoid AF_UNIX path length limits."""
+        # This is a typical macOS TERM_SESSION_ID with UUID
+        long_session = "w0t3p0:BBB00C6D-4693-42F2-9654-7FCE4CE0B594"
+        monkeypatch.setenv("MCPL_SESSION_ID", long_session)
+        path = get_socket_path()
+        path_str = str(path)
+        # Long session ID should not appear literally in the path
+        assert long_session not in path_str
+        # Path should be short enough for AF_UNIX (under 108 bytes)
+        assert len(path_str) < 108
+        # Should use /tmp for short paths
+        assert path_str.startswith("/tmp/")
+        # Path should still be a valid socket path
+        assert path.suffix == ".sock"
 
     @pytest.mark.skipif(not IS_WINDOWS, reason="Windows-specific test")
     def test_windows_pipe_path_format(self, monkeypatch):
