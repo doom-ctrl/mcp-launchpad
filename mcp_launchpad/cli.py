@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -15,9 +16,9 @@ from . import __version__
 from .cache import ToolCache
 from .config import Config, load_config
 from .connection import ConnectionManager, ToolInfo
+from .oauth import OAuthFlowError, TokenDecryptionError, get_oauth_manager
 from .output import OutputHandler
 from .search import SearchMethod, ToolSearcher
-from .oauth import OAuthFlowError, get_oauth_manager
 from .session import SessionClient
 from .state import ServerState
 from .suggestions import (
@@ -673,7 +674,11 @@ def auth(ctx: click.Context) -> None:
 @click.option("--scope", multiple=True, help="Additional scopes to request")
 @click.option("--force", is_flag=True, help="Force re-authentication even if already logged in")
 @click.option("--client-id", help="Use a specific OAuth client ID")
-@click.option("--client-secret", help="Use a specific OAuth client secret")
+@click.option(
+    "--client-secret-stdin",
+    is_flag=True,
+    help="Read client secret from stdin (one line)",
+)
 @click.option("--timeout", default=120, help="Timeout for browser callback (seconds)")
 @click.pass_context
 def auth_login(
@@ -682,7 +687,7 @@ def auth_login(
     scope: tuple[str, ...],
     force: bool,
     client_id: str | None,
-    client_secret: str | None,
+    client_secret_stdin: bool,
     timeout: int,
 ) -> None:
     """Authenticate with an OAuth-protected MCP server.
@@ -690,10 +695,17 @@ def auth_login(
     Opens a browser for authorization and stores tokens securely.
     Tokens are encrypted and stored in ~/.cache/mcp-launchpad/oauth/
 
+    Client secret can be provided via:
+      - MCPL_CLIENT_SECRET environment variable
+      - Config file with oauth_client_secret (supports $ENV interpolation)
+      - Interactive prompt (when DCR is unavailable)
+      - --client-secret-stdin flag (reads one line from stdin)
+
     Example:
         mcpl auth login notion
         mcpl auth login figma --scope "read write"
         mcpl auth login custom --client-id my-client-id
+        echo "secret" | mcpl auth login custom --client-id my-id --client-secret-stdin
     """
     output: OutputHandler = ctx.obj["output"]
     config = get_config(ctx)
@@ -721,7 +733,20 @@ def auth_login(
     oauth_manager = get_oauth_manager()
 
     # Check if already authenticated (unless --force)
-    if not force and oauth_manager.has_valid_token(url):
+    try:
+        has_token = oauth_manager.has_valid_token(url)
+    except TokenDecryptionError:
+        # Token storage corrupted/key changed - proceed with login to overwrite
+        if not ctx.obj["json_mode"]:
+            click.secho(
+                "Warning: Could not read existing tokens (encryption key changed?).",
+                fg="yellow",
+            )
+            click.echo("Proceeding with fresh authentication...")
+            click.echo()
+        has_token = False
+
+    if not force and has_token:
         if ctx.obj["json_mode"]:
             output.success({"server": server, "status": "already_authenticated"})
         else:
@@ -729,9 +754,27 @@ def auth_login(
             click.echo("Use --force to re-authenticate.")
         return
 
-    # Get client credentials from config or command line
+    # Get client credentials
+    # Priority: stdin > env var > config
     config_client_id = client_id or server_config.get_resolved_oauth_client_id()
-    config_client_secret = client_secret or server_config.get_resolved_oauth_client_secret()
+
+    # Resolve client secret from multiple sources
+    resolved_client_secret: str | None = None
+    if client_secret_stdin:
+        # Read from stdin (non-interactive)
+        if sys.stdin.isatty():
+            output.error(
+                ValueError("--client-secret-stdin requires piped input"),
+                help_text="Usage: echo 'secret' | mcpl auth login server --client-secret-stdin",
+            )
+            return
+        resolved_client_secret = sys.stdin.readline().rstrip("\n") or None
+    elif os.environ.get("MCPL_CLIENT_SECRET"):
+        resolved_client_secret = os.environ["MCPL_CLIENT_SECRET"]
+    else:
+        resolved_client_secret = server_config.get_resolved_oauth_client_secret()
+
+    config_client_secret = resolved_client_secret
 
     # Status callback for CLI feedback
     def on_status(message: str) -> None:
@@ -752,6 +795,7 @@ def auth_login(
             "Enter client_secret (leave blank for public client)",
             default="",
             show_default=False,
+            hide_input=True,
         )
         return entered_client_id, entered_client_secret or None
 
@@ -785,6 +829,18 @@ def auth_login(
             click.secho(f"Successfully authenticated with '{server}'!", fg="green")
             click.echo("Tokens stored securely in ~/.cache/mcp-launchpad/oauth/")
 
+            # Warn if using fallback encryption (no keyring)
+            if not oauth_manager.token_store.is_using_keyring():
+                click.echo()
+                click.secho(
+                    "Warning: OS keyring not available. Using fallback encryption.",
+                    fg="yellow",
+                )
+                click.echo(
+                    "Tokens are encrypted but with reduced security. "
+                    "Consider installing a keyring backend."
+                )
+
             # Restart daemon to use new token
             click.echo()
             click.echo("Restarting session daemon to use new credentials...")
@@ -808,18 +864,39 @@ def auth_login(
 
 
 @auth.command("logout")
-@click.argument("server")
+@click.argument("server", required=False)
+@click.option("--all", "logout_all", is_flag=True, help="Clear all stored tokens and credentials")
 @click.pass_context
-def auth_logout(ctx: click.Context, server: str) -> None:
+def auth_logout(ctx: click.Context, server: str | None, logout_all: bool) -> None:
     """Remove stored authentication for a server.
 
     This deletes the stored OAuth tokens for the specified server.
+    Use --all to clear all stored tokens (useful when encryption key changes).
 
     Example:
         mcpl auth logout notion
+        mcpl auth logout --all
     """
     output: OutputHandler = ctx.obj["output"]
     config = get_config(ctx)
+    oauth_manager = get_oauth_manager()
+
+    # Handle --all flag
+    if logout_all:
+        oauth_manager.token_store.clear_all()
+        if ctx.obj["json_mode"]:
+            output.success({"action": "clear_all", "success": True})
+        else:
+            click.secho("Cleared all stored authentication data.", fg="green")
+        return
+
+    # Server is required if not using --all
+    if not server:
+        output.error(
+            ValueError("SERVER argument is required unless using --all"),
+            help_text="Usage: mcpl auth logout <server> or mcpl auth logout --all",
+        )
+        return
 
     # Validate server exists
     if server not in config.servers:
@@ -839,9 +916,17 @@ def auth_logout(ctx: click.Context, server: str) -> None:
         return
 
     url = server_config.get_resolved_url()
-    oauth_manager = get_oauth_manager()
 
-    deleted = oauth_manager.logout(url)
+    try:
+        deleted = oauth_manager.logout(url)
+    except TokenDecryptionError:
+        # Can't read tokens, but we can still try to clear them
+        click.secho(
+            "Warning: Could not read existing tokens (encryption key changed?).",
+            fg="yellow",
+        )
+        click.echo("Use 'mcpl auth logout --all' to clear all stored data.")
+        return
 
     if ctx.obj["json_mode"]:
         output.success({"server": server, "logged_out": deleted})
@@ -889,7 +974,20 @@ def auth_status(ctx: click.Context, server: str | None) -> None:
             return
 
         url = server_config.get_resolved_url()
-        status = oauth_manager.get_auth_status(url, server)
+
+        try:
+            status = oauth_manager.get_auth_status(url, server)
+        except TokenDecryptionError:
+            output.error(
+                ValueError("Cannot read stored tokens"),
+                help_text=(
+                    "The token storage file cannot be decrypted.\n"
+                    "This usually means the encryption key has changed.\n\n"
+                    "To fix: Run 'mcpl auth logout --all' to clear tokens,\n"
+                    "then re-authenticate with 'mcpl auth login <server>'."
+                ),
+            )
+            return
 
         if ctx.obj["json_mode"]:
             output.success(status.to_dict())
@@ -917,14 +1015,34 @@ def auth_status(ctx: click.Context, server: str | None) -> None:
                 click.secho("not authenticated", fg="red")
                 click.echo()
                 click.secho(f"  Run: mcpl auth login {server}", fg="cyan")
+
+            # Warn if using fallback encryption (no keyring)
+            if not oauth_manager.token_store.is_using_keyring():
+                click.echo()
+                click.secho(
+                    "Warning: OS keyring not available. Using fallback encryption.",
+                    fg="yellow",
+                )
     else:
         # Show status for all HTTP servers
-        statuses = []
-        for name, server_config in config.servers.items():
-            if server_config.is_http():
-                url = server_config.get_resolved_url()
-                status = oauth_manager.get_auth_status(url, name)
-                statuses.append(status)
+        try:
+            statuses = []
+            for name, server_config in config.servers.items():
+                if server_config.is_http():
+                    url = server_config.get_resolved_url()
+                    status = oauth_manager.get_auth_status(url, name)
+                    statuses.append(status)
+        except TokenDecryptionError:
+            output.error(
+                ValueError("Cannot read stored tokens"),
+                help_text=(
+                    "The token storage file cannot be decrypted.\n"
+                    "This usually means the encryption key has changed.\n\n"
+                    "To fix: Run 'mcpl auth logout --all' to clear tokens,\n"
+                    "then re-authenticate with 'mcpl auth login <server>'."
+                ),
+            )
+            return
 
         if ctx.obj["json_mode"]:
             output.success({"servers": [s.to_dict() for s in statuses]})
@@ -952,6 +1070,15 @@ def auth_status(ctx: click.Context, server: str | None) -> None:
                     click.secho("not authenticated", fg="red")
 
             click.echo()
+
+            # Warn if using fallback encryption (no keyring)
+            if not oauth_manager.token_store.is_using_keyring():
+                click.secho(
+                    "Warning: OS keyring not available. Using fallback encryption.",
+                    fg="yellow",
+                )
+                click.echo()
+
             # Show hint for unauthenticated servers
             unauthenticated = [s for s in statuses if not s.authenticated]
             if unauthenticated:

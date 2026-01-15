@@ -46,7 +46,7 @@ from .flow import (
 )
 from .manager import AuthStatus, OAuthManager, get_oauth_manager
 from .pkce import PKCEPair, generate_code_challenge, generate_code_verifier, generate_pkce_pair
-from .store import TokenStore, TokenStoreError
+from .store import TokenDecryptionError, TokenStore, TokenStoreError
 from .tokens import ClientCredentials, TokenSet
 
 __all__ = [
@@ -72,6 +72,7 @@ __all__ = [
     # Storage
     "TokenStore",
     "TokenStoreError",
+    "TokenDecryptionError",
     # PKCE
     "generate_pkce_pair",
     "generate_code_verifier",

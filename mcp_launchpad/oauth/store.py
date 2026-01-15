@@ -41,6 +41,19 @@ class TokenStoreError(Exception):
     pass
 
 
+class TokenDecryptionError(TokenStoreError):
+    """Failed to decrypt token storage file.
+
+    This error indicates the encryption key has changed (e.g., keyring cleared,
+    different machine) and existing tokens cannot be read. The caller should
+    handle this by either:
+    - Prompting the user to re-authenticate
+    - Clearing existing tokens with clear_all()
+    """
+
+    pass
+
+
 def _derive_fallback_key() -> bytes:
     """Derive a fallback encryption key from machine-specific data.
 
@@ -170,6 +183,9 @@ class TokenStore:
 
         Returns:
             Decrypted JSON data as dictionary
+
+        Raises:
+            TokenDecryptionError: If decryption fails (key changed, corrupted data)
         """
         filepath = self.store_dir / filename
 
@@ -181,9 +197,18 @@ class TokenStore:
             decrypted_json = self._decrypt(encrypted_data)
             result: dict[str, Any] = json.loads(decrypted_json)
             return result
-        except (json.JSONDecodeError, TokenStoreError) as e:
-            logger.warning(f"Could not read {filename}: {e}")
-            return {}
+        except TokenStoreError as e:
+            # Decryption failed - raise so caller can decide how to handle
+            raise TokenDecryptionError(
+                f"Cannot decrypt {filename}. The encryption key may have changed. "
+                f"Run 'mcpl auth logout --all' to clear stored tokens and re-authenticate."
+            ) from e
+        except json.JSONDecodeError as e:
+            # Data decrypted but is not valid JSON - file may be corrupted
+            raise TokenDecryptionError(
+                f"Token file {filename} is corrupted. "
+                f"Run 'mcpl auth logout --all' to clear and re-authenticate."
+            ) from e
 
     def _write_encrypted_file(self, filename: str, data: dict[str, Any]) -> None:
         """Encrypt and write a JSON file with secure permissions.

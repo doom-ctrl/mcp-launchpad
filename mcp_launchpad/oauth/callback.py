@@ -228,18 +228,28 @@ class LocalhostCallbackServer:
     async def start(self) -> str:
         """Start the callback server.
 
+        Uses port=0 to let the OS atomically assign an available port,
+        avoiding race conditions between port discovery and binding.
+
         Returns:
             The redirect URI to use in the authorization request
         """
-        self.port = find_available_port()
-        self.redirect_uri = f"http://127.0.0.1:{self.port}{self.path}"
         self._result_event = asyncio.Event()
 
+        # Use port=0 to let OS assign an available port atomically
         self._server = await asyncio.start_server(
             self._handle_connection,
             "127.0.0.1",
-            self.port,
+            0,  # Let OS assign available port
         )
+
+        # Get the actual port assigned by the OS
+        sockets = self._server.sockets
+        if not sockets:
+            raise CallbackError("Failed to start callback server: no sockets created")
+
+        self.port = sockets[0].getsockname()[1]
+        self.redirect_uri = f"http://127.0.0.1:{self.port}{self.path}"
 
         logger.debug(f"Callback server started on {self.redirect_uri}")
         return self.redirect_uri
@@ -266,10 +276,10 @@ class LocalhostCallbackServer:
 
         try:
             await asyncio.wait_for(self._result_event.wait(), timeout=self.timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise CallbackTimeoutError(
                 f"Timeout waiting for OAuth callback after {self.timeout} seconds"
-            )
+            ) from None
 
         if self._result is None:
             raise CallbackError("No callback result received")
