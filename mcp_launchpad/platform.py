@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -13,6 +14,11 @@ if TYPE_CHECKING:
 
 # Platform detection
 IS_WINDOWS = sys.platform == "win32"
+
+# AF_UNIX socket path limit is 108 bytes on most Unix systems (104 on macOS).
+# We need to ensure our socket paths stay well under this limit.
+# Using /tmp (always short) + hash of session_id ensures we stay under ~50 chars.
+MAX_SESSION_ID_LEN = 16
 
 
 def is_ide_environment() -> bool:
@@ -101,13 +107,30 @@ def get_session_id() -> str:
     return str(os.getppid())
 
 
+def _shorten_session_id(session_id: str) -> str:
+    """Shorten session ID to avoid AF_UNIX path length limits.
+
+    AF_UNIX socket paths are limited to 108 bytes on Linux and 104 on macOS.
+    Long session IDs (e.g., from TERM_SESSION_ID with UUIDs) can exceed this.
+    We hash long IDs to a fixed short length while preserving uniqueness.
+    """
+    if len(session_id) <= MAX_SESSION_ID_LEN:
+        return session_id
+    # Use first 16 chars of MD5 hash - short but unique enough for session scoping
+    return hashlib.md5(session_id.encode(), usedforsecurity=False).hexdigest()[:MAX_SESSION_ID_LEN]
+
+
 def get_socket_path() -> Path:
     r"""Get the path for the daemon socket/pipe.
 
     On Unix: /tmp/mcpl-{uid}-{session_id}.sock
     On Windows: \\.\pipe\mcpl-{username}-{session_id}
+
+    Note: We use /tmp directly on Unix instead of tempfile.gettempdir() because
+    macOS returns long paths like /var/folders/.../T/ which can exceed the
+    108-byte AF_UNIX socket path limit when combined with session IDs.
     """
-    session_id = get_session_id()
+    session_id = _shorten_session_id(get_session_id())
 
     if IS_WINDOWS:
         username = os.environ.get("USERNAME", "user")
@@ -115,13 +138,18 @@ def get_socket_path() -> Path:
         return Path(f"\\\\.\\pipe\\mcpl-{username}-{session_id}")
     else:
         uid = os.getuid()
-        # Use tempdir for socket file (ensures write permission)
-        return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.sock"
+        # Use /tmp directly - it's always short and writable.
+        # tempfile.gettempdir() returns long paths on macOS (/var/folders/...)
+        # which can exceed AF_UNIX 108-byte limit.
+        return Path("/tmp") / f"mcpl-{uid}-{session_id}.sock"
 
 
 def get_pid_file_path() -> Path:
-    """Get the path for the daemon PID file."""
-    session_id = get_session_id()
+    """Get the path for the daemon PID file.
+
+    Uses the same shortened session ID as get_socket_path() for consistency.
+    """
+    session_id = _shorten_session_id(get_session_id())
 
     if IS_WINDOWS:
         username = os.environ.get("USERNAME", "user")
@@ -129,12 +157,16 @@ def get_pid_file_path() -> Path:
         return temp_dir / f"mcpl-{username}-{session_id}.pid"
     else:
         uid = os.getuid()
-        return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.pid"
+        # Use /tmp for consistency with socket path
+        return Path("/tmp") / f"mcpl-{uid}-{session_id}.pid"
 
 
 def get_log_file_path() -> Path:
-    """Get the path for the daemon log file."""
-    session_id = get_session_id()
+    """Get the path for the daemon log file.
+
+    Uses the same shortened session ID as get_socket_path() for consistency.
+    """
+    session_id = _shorten_session_id(get_session_id())
 
     if IS_WINDOWS:
         username = os.environ.get("USERNAME", "user")
@@ -142,7 +174,40 @@ def get_log_file_path() -> Path:
         return temp_dir / f"mcpl-{username}-{session_id}.log"
     else:
         uid = os.getuid()
-        return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.log"
+        # Use /tmp for consistency with socket path
+        return Path("/tmp") / f"mcpl-{uid}-{session_id}.log"
+
+
+def get_legacy_socket_path() -> Path | None:
+    """Get old-format socket path (pre-v0.x.x) for migration detection.
+
+    Old format used tempfile.gettempdir() and unhashed session IDs.
+    Returns None on Windows (no migration needed - Windows uses named pipes).
+
+    Used during upgrade to detect and clean up legacy daemons.
+    """
+    if IS_WINDOWS:
+        return None  # Windows uses named pipes, no migration needed
+
+    session_id = get_session_id()  # Raw, unhashed
+    uid = os.getuid()
+    return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.sock"
+
+
+def get_legacy_pid_file_path() -> Path | None:
+    """Get old-format PID file path (pre-v0.x.x) for migration detection.
+
+    Old format used tempfile.gettempdir() and unhashed session IDs.
+    Returns None on Windows (no migration needed).
+
+    Used during upgrade to detect and clean up legacy daemons.
+    """
+    if IS_WINDOWS:
+        return None  # Windows uses named pipes, no migration needed
+
+    session_id = get_session_id()  # Raw, unhashed
+    uid = os.getuid()
+    return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.pid"
 
 
 def is_process_alive(pid: int) -> bool:

@@ -7,7 +7,12 @@ import pytest
 
 from mcp_launchpad.platform import (
     IS_WINDOWS,
+    MAX_SESSION_ID_LEN,
+    _shorten_session_id,
     get_ide_session_anchor,
+    get_legacy_pid_file_path,
+    get_legacy_socket_path,
+    get_log_file_path,
     get_parent_pid,
     get_pid_file_path,
     get_session_id,
@@ -116,6 +121,16 @@ class TestGetSessionId:
         )
         assert get_session_id() == "vscode-abc123def"
 
+    def test_vscode_git_ipc_no_match_falls_through(self, monkeypatch):
+        """Test that non-matching VS Code Git IPC handle falls through to next check."""
+        monkeypatch.delenv("MCPL_SESSION_ID", raising=False)
+        monkeypatch.delenv("TERM_SESSION_ID", raising=False)
+        # Set a handle that doesn't match the vscode-git-{hex}.sock pattern
+        monkeypatch.setenv("VSCODE_GIT_IPC_HANDLE", "/some/other/path/socket.sock")
+        # Should fall through to CLAUDE_CODE_SSE_PORT
+        monkeypatch.setenv("CLAUDE_CODE_SSE_PORT", "54321")
+        assert get_session_id() == "claude-54321"
+
     def test_uses_claude_code_sse_port(self, monkeypatch):
         """Test that Claude Code SSE port is used when no Git IPC handle."""
         monkeypatch.delenv("MCPL_SESSION_ID", raising=False)
@@ -175,10 +190,11 @@ class TestGetSocketPath:
         assert isinstance(path, Path)
 
     def test_includes_session_id(self, monkeypatch):
-        """Test that socket path includes session ID."""
-        monkeypatch.setenv("MCPL_SESSION_ID", "unique-session-456")
+        """Test that socket path includes session ID (short IDs are preserved)."""
+        # Use a short session ID (<=16 chars) to avoid hashing
+        monkeypatch.setenv("MCPL_SESSION_ID", "sess-456")
         path = get_socket_path()
-        assert "unique-session-456" in str(path)
+        assert "sess-456" in str(path)
 
     @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
     def test_unix_socket_path_format(self, monkeypatch):
@@ -187,6 +203,23 @@ class TestGetSocketPath:
         path = get_socket_path()
         assert path.suffix == ".sock"
         assert str(os.getuid()) in str(path)
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_long_session_id_is_hashed(self, monkeypatch):
+        """Test that long session IDs are hashed to avoid AF_UNIX path length limits."""
+        # This is a typical macOS TERM_SESSION_ID with UUID
+        long_session = "w0t3p0:BBB00C6D-4693-42F2-9654-7FCE4CE0B594"
+        monkeypatch.setenv("MCPL_SESSION_ID", long_session)
+        path = get_socket_path()
+        path_str = str(path)
+        # Long session ID should not appear literally in the path
+        assert long_session not in path_str
+        # Path should be short enough for AF_UNIX (under 108 bytes)
+        assert len(path_str) < 108
+        # Should use /tmp for short paths
+        assert path_str.startswith("/tmp/")
+        # Path should still be a valid socket path
+        assert path.suffix == ".sock"
 
     @pytest.mark.skipif(not IS_WINDOWS, reason="Windows-specific test")
     def test_windows_pipe_path_format(self, monkeypatch):
@@ -254,3 +287,203 @@ class TestGetParentPid:
         """Test that parent PID is not the current process."""
         parent_pid = get_parent_pid()
         assert parent_pid != os.getpid()
+
+
+class TestShortenSessionId:
+    """Tests for _shorten_session_id function."""
+
+    def test_short_id_unchanged(self):
+        """Test that short session IDs are not modified."""
+        short_id = "abc123"
+        assert _shorten_session_id(short_id) == short_id
+
+    def test_exact_max_length_unchanged(self):
+        """Test that session ID at exactly max length is not modified."""
+        exact_id = "a" * MAX_SESSION_ID_LEN
+        assert _shorten_session_id(exact_id) == exact_id
+
+    def test_long_id_is_hashed(self):
+        """Test that long session IDs are hashed."""
+        long_id = "w0t3p0:BBB00C6D-4693-42F2-9654-7FCE4CE0B594"
+        result = _shorten_session_id(long_id)
+        # Should be shortened to max length
+        assert len(result) == MAX_SESSION_ID_LEN
+        # Original should not appear
+        assert long_id not in result
+        # Should be hexadecimal (MD5 hash)
+        assert all(c in "0123456789abcdef" for c in result)
+
+    def test_hashing_is_deterministic(self):
+        """Test that hashing produces consistent results."""
+        long_id = "some-very-long-session-id-that-exceeds-limit"
+        result1 = _shorten_session_id(long_id)
+        result2 = _shorten_session_id(long_id)
+        assert result1 == result2
+
+    def test_different_long_ids_produce_different_hashes(self):
+        """Test that different long IDs produce different hashes."""
+        id1 = "first-very-long-session-id-12345"
+        id2 = "second-very-long-session-id-67890"
+        result1 = _shorten_session_id(id1)
+        result2 = _shorten_session_id(id2)
+        assert result1 != result2
+
+    def test_empty_string(self):
+        """Test that empty string is handled correctly."""
+        result = _shorten_session_id("")
+        assert result == ""
+
+
+class TestGetLegacySocketPath:
+    """Tests for get_legacy_socket_path function."""
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_returns_path_object(self, monkeypatch):
+        """Test that legacy socket path is a Path object."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_legacy_socket_path()
+        assert isinstance(path, Path)
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_uses_tempdir(self, monkeypatch):
+        """Test that legacy path uses tempfile.gettempdir()."""
+        import tempfile
+
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_legacy_socket_path()
+        # Legacy path should use tempdir, not /tmp directly
+        assert str(path).startswith(tempfile.gettempdir())
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_uses_unhashed_session_id(self, monkeypatch):
+        """Test that legacy path uses unhashed session ID."""
+        long_session = "w0t3p0:BBB00C6D-4693-42F2-9654-7FCE4CE0B594"
+        monkeypatch.setenv("MCPL_SESSION_ID", long_session)
+        path = get_legacy_socket_path()
+        # Legacy path should contain the full unhashed session ID
+        assert long_session in str(path)
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_differs_from_new_socket_path(self, monkeypatch):
+        """Test that legacy path differs from new path for long session IDs."""
+        long_session = "w0t3p0:BBB00C6D-4693-42F2-9654-7FCE4CE0B594"
+        monkeypatch.setenv("MCPL_SESSION_ID", long_session)
+        legacy_path = get_legacy_socket_path()
+        new_path = get_socket_path()
+        assert legacy_path != new_path
+
+    @pytest.mark.skipif(not IS_WINDOWS, reason="Windows-specific test")
+    def test_returns_none_on_windows(self, monkeypatch):
+        """Test that legacy socket path returns None on Windows."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_legacy_socket_path()
+        assert path is None
+
+
+class TestGetLegacyPidFilePath:
+    """Tests for get_legacy_pid_file_path function."""
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_returns_path_object(self, monkeypatch):
+        """Test that legacy PID file path is a Path object."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_legacy_pid_file_path()
+        assert isinstance(path, Path)
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_uses_tempdir(self, monkeypatch):
+        """Test that legacy path uses tempfile.gettempdir()."""
+        import tempfile
+
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_legacy_pid_file_path()
+        assert str(path).startswith(tempfile.gettempdir())
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_uses_unhashed_session_id(self, monkeypatch):
+        """Test that legacy path uses unhashed session ID."""
+        long_session = "w0t3p0:BBB00C6D-4693-42F2-9654-7FCE4CE0B594"
+        monkeypatch.setenv("MCPL_SESSION_ID", long_session)
+        path = get_legacy_pid_file_path()
+        assert long_session in str(path)
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_has_pid_extension(self, monkeypatch):
+        """Test that legacy PID file has .pid extension."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_legacy_pid_file_path()
+        assert path.suffix == ".pid"
+
+    @pytest.mark.skipif(not IS_WINDOWS, reason="Windows-specific test")
+    def test_returns_none_on_windows(self, monkeypatch):
+        """Test that legacy PID file path returns None on Windows."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_legacy_pid_file_path()
+        assert path is None
+
+
+class TestGetLogFilePath:
+    """Tests for get_log_file_path function."""
+
+    def test_returns_path_object(self, monkeypatch):
+        """Test that log file path is a Path object."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_log_file_path()
+        assert isinstance(path, Path)
+
+    def test_has_log_extension(self, monkeypatch):
+        """Test that log file has .log extension."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_log_file_path()
+        assert path.suffix == ".log"
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_unix_log_path_uses_tmp(self, monkeypatch):
+        """Test Unix log path uses /tmp directory."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "test-session")
+        path = get_log_file_path()
+        assert str(path).startswith("/tmp/")
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_long_session_id_is_hashed_in_log_path(self, monkeypatch):
+        """Test that long session IDs are hashed in log path."""
+        long_session = "w0t3p0:BBB00C6D-4693-42F2-9654-7FCE4CE0B594"
+        monkeypatch.setenv("MCPL_SESSION_ID", long_session)
+        path = get_log_file_path()
+        # Long session ID should not appear in the path
+        assert long_session not in str(path)
+
+
+class TestPathConsistency:
+    """Tests for consistency between path functions."""
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_socket_pid_log_use_same_session_id(self, monkeypatch):
+        """Test that socket, PID, and log paths use the same session ID portion."""
+        monkeypatch.setenv("MCPL_SESSION_ID", "consistent-session")
+        socket_path = str(get_socket_path())
+        pid_path = str(get_pid_file_path())
+        log_path = str(get_log_file_path())
+
+        # Extract session ID from each path (after uid and before extension)
+        uid = str(os.getuid())
+        socket_session = socket_path.split(f"mcpl-{uid}-")[1].split(".sock")[0]
+        pid_session = pid_path.split(f"mcpl-{uid}-")[1].split(".pid")[0]
+        log_session = log_path.split(f"mcpl-{uid}-")[1].split(".log")[0]
+
+        assert socket_session == pid_session == log_session
+
+    @pytest.mark.skipif(IS_WINDOWS, reason="Unix-specific test")
+    def test_all_paths_under_108_bytes(self, monkeypatch):
+        """Test that all paths stay under AF_UNIX 108 byte limit."""
+        # Use a very long session ID
+        long_session = "a" * 200
+        monkeypatch.setenv("MCPL_SESSION_ID", long_session)
+
+        socket_path = str(get_socket_path())
+        pid_path = str(get_pid_file_path())
+        log_path = str(get_log_file_path())
+
+        assert len(socket_path) < 108, f"Socket path too long: {len(socket_path)}"
+        assert len(pid_path) < 108, f"PID path too long: {len(pid_path)}"
+        assert len(log_path) < 108, f"Log path too long: {len(log_path)}"
