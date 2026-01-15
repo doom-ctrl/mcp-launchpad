@@ -178,6 +178,38 @@ def get_log_file_path() -> Path:
         return Path("/tmp") / f"mcpl-{uid}-{session_id}.log"
 
 
+def get_legacy_socket_path() -> Path | None:
+    """Get old-format socket path (pre-v0.x.x) for migration detection.
+
+    Old format used tempfile.gettempdir() and unhashed session IDs.
+    Returns None on Windows (no migration needed - Windows uses named pipes).
+
+    Used during upgrade to detect and clean up legacy daemons.
+    """
+    if IS_WINDOWS:
+        return None  # Windows uses named pipes, no migration needed
+
+    session_id = get_session_id()  # Raw, unhashed
+    uid = os.getuid()
+    return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.sock"
+
+
+def get_legacy_pid_file_path() -> Path | None:
+    """Get old-format PID file path (pre-v0.x.x) for migration detection.
+
+    Old format used tempfile.gettempdir() and unhashed session IDs.
+    Returns None on Windows (no migration needed).
+
+    Used during upgrade to detect and clean up legacy daemons.
+    """
+    if IS_WINDOWS:
+        return None  # Windows uses named pipes, no migration needed
+
+    session_id = get_session_id()  # Raw, unhashed
+    uid = os.getuid()
+    return Path(tempfile.gettempdir()) / f"mcpl-{uid}-{session_id}.pid"
+
+
 def is_process_alive(pid: int) -> bool:
     """Check if a process with the given PID is still running.
 

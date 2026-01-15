@@ -215,3 +215,152 @@ class TestSessionClientDaemonManagement:
                             await client._send_request(
                                 IPCMessage(action="test", payload={})
                             )
+
+
+class TestLegacyDaemonCleanup:
+    """Tests for legacy daemon cleanup during migration."""
+
+    @pytest.mark.asyncio
+    async def test_cleanup_skips_when_no_legacy_files(self, mock_config, tmp_path, monkeypatch):
+        """Test that cleanup does nothing when no legacy files exist."""
+        client = SessionClient(mock_config)
+
+        # Mock legacy paths to non-existent files
+        with patch("mcp_launchpad.session.get_legacy_pid_file_path") as mock_pid_path:
+            with patch("mcp_launchpad.session.get_legacy_socket_path") as mock_socket_path:
+                mock_pid_path.return_value = tmp_path / "nonexistent.pid"
+                mock_socket_path.return_value = tmp_path / "nonexistent.sock"
+
+                with patch("mcp_launchpad.session.get_socket_path") as mock_new_socket:
+                    mock_new_socket.return_value = tmp_path / "new.sock"
+
+                    # Should complete without error
+                    await client._cleanup_legacy_daemon()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_skips_on_windows(self, mock_config):
+        """Test that cleanup is skipped on Windows (returns None paths)."""
+        client = SessionClient(mock_config)
+
+        with patch("mcp_launchpad.session.get_legacy_pid_file_path", return_value=None):
+            with patch("mcp_launchpad.session.get_legacy_socket_path", return_value=None):
+                # Should complete without error
+                await client._cleanup_legacy_daemon()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_skips_when_paths_identical(self, mock_config, tmp_path):
+        """Test that cleanup is skipped when legacy and new paths are identical."""
+        client = SessionClient(mock_config)
+
+        same_path = tmp_path / "same.sock"
+        same_pid = tmp_path / "same.pid"
+
+        with patch("mcp_launchpad.session.get_legacy_socket_path", return_value=same_path):
+            with patch("mcp_launchpad.session.get_legacy_pid_file_path", return_value=same_pid):
+                with patch("mcp_launchpad.session.get_socket_path", return_value=same_path):
+                    # Should complete without error (no migration needed)
+                    await client._cleanup_legacy_daemon()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_legacy_socket_file(self, mock_config, tmp_path):
+        """Test that cleanup removes legacy socket file."""
+        client = SessionClient(mock_config)
+
+        # Create legacy socket file
+        legacy_socket = tmp_path / "legacy.sock"
+        legacy_socket.touch()
+        legacy_pid = tmp_path / "nonexistent.pid"  # No PID file
+
+        with patch("mcp_launchpad.session.get_legacy_socket_path", return_value=legacy_socket):
+            with patch("mcp_launchpad.session.get_legacy_pid_file_path", return_value=legacy_pid):
+                with patch("mcp_launchpad.session.get_socket_path") as mock_new:
+                    mock_new.return_value = tmp_path / "new.sock"
+
+                    await client._cleanup_legacy_daemon()
+
+                    # Legacy socket should be removed
+                    assert not legacy_socket.exists()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_removes_legacy_pid_file(self, mock_config, tmp_path):
+        """Test that cleanup removes legacy PID file."""
+        client = SessionClient(mock_config)
+
+        legacy_socket = tmp_path / "nonexistent.sock"
+        legacy_pid = tmp_path / "legacy.pid"
+        legacy_pid.write_text("99999")  # Non-existent process
+
+        with patch("mcp_launchpad.session.get_legacy_socket_path", return_value=legacy_socket):
+            with patch("mcp_launchpad.session.get_legacy_pid_file_path", return_value=legacy_pid):
+                with patch("mcp_launchpad.session.get_socket_path") as mock_new:
+                    mock_new.return_value = tmp_path / "new.sock"
+                    with patch("mcp_launchpad.session.is_process_alive", return_value=False):
+                        await client._cleanup_legacy_daemon()
+
+                        # Legacy PID file should be removed
+                        assert not legacy_pid.exists()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_terminates_running_daemon(self, mock_config, tmp_path):
+        """Test that cleanup terminates a running legacy daemon."""
+        import signal
+
+        client = SessionClient(mock_config)
+
+        legacy_socket = tmp_path / "legacy.sock"
+        legacy_pid = tmp_path / "legacy.pid"
+        legacy_pid.write_text("12345")
+        legacy_socket.touch()
+
+        with patch("mcp_launchpad.session.get_legacy_socket_path", return_value=legacy_socket):
+            with patch("mcp_launchpad.session.get_legacy_pid_file_path", return_value=legacy_pid):
+                with patch("mcp_launchpad.session.get_socket_path") as mock_new:
+                    mock_new.return_value = tmp_path / "new.sock"
+                    with patch("mcp_launchpad.session.is_process_alive", return_value=True):
+                        with patch("os.kill") as mock_kill:
+                            await client._cleanup_legacy_daemon()
+
+                            # Should have sent SIGTERM to the process
+                            mock_kill.assert_called_once_with(12345, signal.SIGTERM)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_handles_invalid_pid_file(self, mock_config, tmp_path):
+        """Test that cleanup handles invalid PID file content gracefully."""
+        client = SessionClient(mock_config)
+
+        legacy_socket = tmp_path / "nonexistent.sock"
+        legacy_pid = tmp_path / "legacy.pid"
+        legacy_pid.write_text("not-a-number")  # Invalid content
+
+        with patch("mcp_launchpad.session.get_legacy_socket_path", return_value=legacy_socket):
+            with patch("mcp_launchpad.session.get_legacy_pid_file_path", return_value=legacy_pid):
+                with patch("mcp_launchpad.session.get_socket_path") as mock_new:
+                    mock_new.return_value = tmp_path / "new.sock"
+
+                    # Should not raise, should handle gracefully
+                    await client._cleanup_legacy_daemon()
+
+                    # PID file should be removed despite invalid content
+                    assert not legacy_pid.exists()
+
+    @pytest.mark.asyncio
+    async def test_ensure_daemon_running_calls_cleanup(self, mock_config):
+        """Test that _ensure_daemon_running calls _cleanup_legacy_daemon."""
+        client = SessionClient(mock_config)
+
+        with patch.object(client, "_is_daemon_running", new_callable=AsyncMock) as mock_running:
+            mock_running.return_value = False
+
+            with patch.object(
+                client, "_cleanup_legacy_daemon", new_callable=AsyncMock
+            ) as mock_cleanup:
+                with patch.object(client, "_start_daemon", new_callable=AsyncMock):
+                    # Make it timeout quickly
+                    with patch("mcp_launchpad.session.DAEMON_START_TIMEOUT", 0.1):
+                        try:
+                            await client._ensure_daemon_running()
+                        except RuntimeError:
+                            pass  # Expected timeout
+
+                        # Cleanup should have been called
+                        mock_cleanup.assert_called_once()

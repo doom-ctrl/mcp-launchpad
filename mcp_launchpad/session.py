@@ -11,6 +11,8 @@ from .config import Config
 from .ipc import IPCMessage, connect_to_daemon, read_message, write_message
 from .platform import (
     IS_WINDOWS,
+    get_legacy_pid_file_path,
+    get_legacy_socket_path,
     get_log_file_path,
     get_pid_file_path,
     get_session_id,
@@ -128,6 +130,10 @@ class SessionClient:
         if await self._is_daemon_running():
             return
 
+        # Clean up any legacy daemon before starting new one
+        # This handles migration from old path format (pre-socket-path-fix)
+        await self._cleanup_legacy_daemon()
+
         # Start the daemon
         await self._start_daemon()
 
@@ -208,6 +214,55 @@ class SessionClient:
             return True
 
         return False
+
+    async def _cleanup_legacy_daemon(self) -> None:
+        """Clean up any legacy daemon from before path format change.
+
+        Prior to the AF_UNIX socket path fix, socket paths used
+        tempfile.gettempdir() (which returns long paths on macOS) and
+        unhashed session IDs. This method detects and cleans up old daemons
+        to prevent duplicate instances.
+        """
+        import signal
+
+        legacy_pid_path = get_legacy_pid_file_path()
+        legacy_socket_path = get_legacy_socket_path()
+
+        # Skip on Windows or if no legacy paths (returns None)
+        if legacy_pid_path is None or legacy_socket_path is None:
+            return
+
+        # Skip if legacy path is same as new path (no migration needed)
+        if legacy_socket_path == get_socket_path():
+            return
+
+        # Skip if no legacy files exist
+        if not legacy_pid_path.exists() and not legacy_socket_path.exists():
+            return
+
+        # If PID file exists, check if process is alive and terminate it
+        if legacy_pid_path.exists():
+            try:
+                pid = int(legacy_pid_path.read_text().strip())
+                if is_process_alive(pid):
+                    # Gracefully terminate old daemon
+                    os.kill(pid, signal.SIGTERM)
+                    # Give it time to shut down
+                    await asyncio.sleep(0.5)
+            except (ValueError, OSError):
+                pass
+            finally:
+                try:
+                    legacy_pid_path.unlink(missing_ok=True)
+                except OSError:
+                    pass  # May fail if path no longer exists
+
+        # Clean up legacy socket
+        if legacy_socket_path.exists():
+            try:
+                legacy_socket_path.unlink(missing_ok=True)
+            except OSError:
+                pass  # May fail if path no longer exists
 
     async def _start_daemon(self) -> None:
         """Start the daemon process."""
