@@ -24,9 +24,11 @@
       "*": "ask",
       "git *": "allow",
       "npm *": "allow",
-      "mcpl *": "allow"
+      "mcpl *": "allow",
+      "uv tool run mcpl *": "allow"
     }
   },
+  "instructions": ["CLAUDE.md", "OPENCODE.md"],
   "autoupdate": "notify",
   "share": "manual",
   "mcp": {
