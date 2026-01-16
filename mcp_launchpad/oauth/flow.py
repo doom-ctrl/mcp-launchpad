@@ -11,6 +11,7 @@ This module orchestrates the complete OAuth authorization flow:
 8. Store tokens securely
 """
 
+import hmac
 import logging
 import webbrowser
 from typing import Any, Callable
@@ -577,7 +578,8 @@ class OAuthFlow:
                         f"Authorization failed: {result.error} - {result.error_description}"
                     )
 
-                if result.state != state:
+                # Use constant-time comparison to prevent timing attacks
+                if not hmac.compare_digest(result.state or "", state):
                     raise OAuthFlowError(
                         "State mismatch in callback - possible CSRF attack"
                     )

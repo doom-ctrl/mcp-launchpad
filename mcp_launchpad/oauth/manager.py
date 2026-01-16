@@ -102,7 +102,7 @@ class OAuthManager:
         # TokenStore is lazy-initialized in field default
 
     @property
-    def store(self) -> TokenStore:
+    def token_store(self) -> TokenStore:
         """Get the token store."""
         return self._store
 
