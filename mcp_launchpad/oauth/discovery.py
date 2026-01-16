@@ -20,6 +20,26 @@ class DiscoveryError(Exception):
     pass
 
 
+def _require_https(url: str, context: str) -> None:
+    """Validate that a URL uses HTTPS.
+
+    OAuth endpoints must use HTTPS to prevent man-in-the-middle attacks
+    that could intercept authorization codes or tokens.
+
+    Args:
+        url: The URL to validate
+        context: Description of what this URL is for (used in error message)
+
+    Raises:
+        DiscoveryError: If the URL doesn't use HTTPS
+    """
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise DiscoveryError(
+            f"{context} must use HTTPS for security, got: {url}"
+        )
+
+
 @dataclass
 class ProtectedResourceMetadata:
     """OAuth 2.0 Protected Resource Metadata per RFC 9728.
@@ -76,12 +96,29 @@ class AuthServerMetadata:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AuthServerMetadata":
-        """Create from JSON response."""
+        """Create from JSON response.
+
+        Validates that critical OAuth endpoints use HTTPS.
+
+        Raises:
+            DiscoveryError: If authorization or token endpoint doesn't use HTTPS
+        """
+        # Validate critical endpoints use HTTPS
+        auth_endpoint = data["authorization_endpoint"]
+        token_endpoint = data["token_endpoint"]
+        _require_https(auth_endpoint, "Authorization endpoint")
+        _require_https(token_endpoint, "Token endpoint")
+
+        # Registration endpoint is optional, but if present must use HTTPS
+        registration_endpoint = data.get("registration_endpoint")
+        if registration_endpoint:
+            _require_https(registration_endpoint, "Registration endpoint")
+
         return cls(
             issuer=data["issuer"],
-            authorization_endpoint=data["authorization_endpoint"],
-            token_endpoint=data["token_endpoint"],
-            registration_endpoint=data.get("registration_endpoint"),
+            authorization_endpoint=auth_endpoint,
+            token_endpoint=token_endpoint,
+            registration_endpoint=registration_endpoint,
             scopes_supported=data.get("scopes_supported"),
             response_types_supported=data.get("response_types_supported", ["code"]),
             grant_types_supported=data.get(
@@ -154,7 +191,7 @@ def get_resource_metadata_url(www_authenticate: str) -> str:
         The resource_metadata URL
 
     Raises:
-        DiscoveryError: If resource_metadata is not found
+        DiscoveryError: If resource_metadata is not found or doesn't use HTTPS
     """
     params = parse_www_authenticate(www_authenticate)
 
@@ -163,7 +200,9 @@ def get_resource_metadata_url(www_authenticate: str) -> str:
             f"WWW-Authenticate header missing resource_metadata parameter: {www_authenticate}"
         )
 
-    return params["resource_metadata"]
+    url = params["resource_metadata"]
+    _require_https(url, "Resource metadata URL")
+    return url
 
 
 def compute_resource_uri(server_url: str) -> str:
@@ -204,13 +243,16 @@ async def fetch_protected_resource_metadata(
         ProtectedResourceMetadata instance
 
     Raises:
-        DiscoveryError: If metadata cannot be fetched or parsed
+        DiscoveryError: If metadata cannot be fetched or parsed, or URL is not HTTPS
     """
     # If URL doesn't contain well-known path, construct it
     if "/.well-known/oauth-protected-resource" not in url:
         parsed = urlparse(url)
         base_url = f"{parsed.scheme}://{parsed.netloc}"
         url = urljoin(base_url, "/.well-known/oauth-protected-resource")
+
+    # Validate HTTPS for security
+    _require_https(url, "Protected resource metadata URL")
 
     client = http_client or httpx.AsyncClient(timeout=timeout)
     should_close = http_client is None
@@ -254,8 +296,11 @@ async def fetch_auth_server_metadata(
         AuthServerMetadata instance
 
     Raises:
-        DiscoveryError: If metadata cannot be fetched or parsed
+        DiscoveryError: If metadata cannot be fetched or parsed, or URL is not HTTPS
     """
+    # Validate issuer uses HTTPS
+    _require_https(issuer, "Authorization server issuer")
+
     client = http_client or httpx.AsyncClient(timeout=timeout)
     should_close = http_client is None
 

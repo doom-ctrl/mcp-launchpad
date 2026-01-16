@@ -9,6 +9,7 @@ authorization callbacks. It:
 """
 
 import asyncio
+import html
 import logging
 import socket
 from dataclasses import dataclass
@@ -335,9 +336,10 @@ class LocalhostCallbackServer:
             if result.is_success():
                 await self._send_html_response(writer, HTTPStatus.OK, SUCCESS_HTML)
             else:
+                # HTML-escape error messages to prevent XSS attacks
                 error_html = ERROR_HTML.format(
-                    error=result.error or "unknown_error",
-                    description=result.error_description or "No description provided",
+                    error=html.escape(result.error or "unknown_error"),
+                    description=html.escape(result.error_description or "No description provided"),
                 )
                 await self._send_html_response(writer, HTTPStatus.OK, error_html)
 
@@ -383,14 +385,17 @@ class LocalhostCallbackServer:
         self,
         writer: asyncio.StreamWriter,
         status: HTTPStatus,
-        html: str,
+        html_content: str,
     ) -> None:
-        """Send an HTML HTTP response."""
-        body = html.encode("utf-8")
+        """Send an HTML HTTP response with security headers."""
+        body = html_content.encode("utf-8")
         headers = (
             f"HTTP/1.1 {status.value} {status.phrase}\r\n"
             f"Content-Type: text/html; charset=utf-8\r\n"
             f"Content-Length: {len(body)}\r\n"
+            f"X-Content-Type-Options: nosniff\r\n"
+            f"X-Frame-Options: DENY\r\n"
+            f"Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'\r\n"
             f"Connection: close\r\n"
             f"\r\n"
         )

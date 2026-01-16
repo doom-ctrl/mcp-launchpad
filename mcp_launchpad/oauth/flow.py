@@ -101,9 +101,11 @@ async def register_client_dcr(
             error_detail = ""
             try:
                 error_data = response.json()
+                # Only extract safe error fields, not arbitrary response data
                 error_detail = f": {error_data.get('error', '')} - {error_data.get('error_description', '')}"
             except Exception:
-                error_detail = f": {response.text[:200]}"
+                # Don't include raw response body - it might contain secrets
+                error_detail = ""
 
             raise ClientRegistrationError(
                 f"Dynamic Client Registration failed (HTTP {response.status_code}){error_detail}"
@@ -222,9 +224,11 @@ async def exchange_code_for_tokens(
             error_detail = ""
             try:
                 error_data = response.json()
+                # Only extract safe error fields, not arbitrary response data
                 error_detail = f": {error_data.get('error', '')} - {error_data.get('error_description', '')}"
             except Exception:
-                error_detail = f": {response.text[:200]}"
+                # Don't include raw response body - it might contain tokens or secrets
+                error_detail = ""
 
             raise TokenExchangeError(
                 f"Token exchange failed (HTTP {response.status_code}){error_detail}"
@@ -285,9 +289,11 @@ async def refresh_token(
             error_detail = ""
             try:
                 error_data = response.json()
+                # Only extract safe error fields, not arbitrary response data
                 error_detail = f": {error_data.get('error', '')} - {error_data.get('error_description', '')}"
             except Exception:
-                error_detail = f": {response.text[:200]}"
+                # Don't include raw response body - it might contain tokens or secrets
+                error_detail = ""
 
             raise TokenExchangeError(
                 f"Token refresh failed (HTTP {response.status_code}){error_detail}"
